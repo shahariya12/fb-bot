@@ -14,7 +14,7 @@ import threading
 import csv
 import datetime
 from concurrent.futures import ThreadPoolExecutor
-from flask import Flask
+from flask import Flask, request, jsonify, send_file, render_template_string
 
 try:
     from curl_cffi import requests as cureq
@@ -29,17 +29,18 @@ BOT_TOKEN = "9025360567:AAEJ2Jq2FSAVpDOVC3UCPYViQE9-sNI7NSk"
 bot = telebot.TeleBot(BOT_TOKEN)
 
 # ══════════════════════════════════════════════════════════
-# FLASK WEB SERVER
+# FLASK WEB SERVER SETUP
 # ══════════════════════════════════════════════════════════
 app = Flask('')
+WEB_LOGS = []
+IS_RUNNING = False
+WEB_STATE = {"total": 0, "success": 0, "current": 0}
 
-@app.route('/')
-def home():
-    return "Bot is alive and running!"
-
-def run_flask():
-    port = int(os.environ.get('PORT', 8080))
-    app.run(host='0.0.0.0', port=port)
+def add_web_log(msg, color="white"):
+    global WEB_LOGS
+    t = datetime.datetime.now().strftime("%H:%M:%S")
+    WEB_LOGS.append({"time": t, "msg": msg, "color": color})
+    if len(WEB_LOGS) > 100: WEB_LOGS.pop(0) # Keep last 100 logs
 
 # ══════════════════════════════════════════════════════════
 # CONSTANTS & FILES
@@ -82,8 +83,7 @@ def save_to_csv(uid, cookie, email):
                     writer.writerow(['UID', 'COOKIE', 'MAIL'])
                 writer.writerow([uid, cookie, email])
         return True
-    except Exception as e:
-        return False
+    except Exception as e: return False
 
 def save_failed_to_csv(email, reason):
     try:
@@ -95,8 +95,7 @@ def save_failed_to_csv(email, reason):
                     writer.writerow(['MAIL', 'REASON'])
                 writer.writerow([email, reason])
         return True
-    except Exception as e:
-        return False
+    except Exception as e: return False
 
 # ══════════════════════════════════════════════════════════
 # PROXY
@@ -257,6 +256,273 @@ def resend_otp(session, uid, proxy):
     except Exception: return False
 
 # ══════════════════════════════════════════════════════════
+# CORE EXECUTE (SHARED BY BOT & WEB)
+# ══════════════════════════════════════════════════════════
+def execute_batch(chat_id, emails, password, lang, custom_name, use_proxy, is_web=False):
+    global IS_RUNNING, WEB_STATE
+    IS_RUNNING = True
+    success_count = 0
+    WEB_STATE["total"] = len(emails)
+    WEB_STATE["success"] = 0
+    
+    def process_one(email, idx, total):
+        nonlocal success_count
+        WEB_STATE["current"] = idx
+        c_fname = custom_name[0] if custom_name else None
+        c_lname = custom_name[1] if custom_name else None
+        
+        status_msg = None
+        if not is_web and chat_id:
+            status_msg = bot.send_message(chat_id, f"⏳ [{idx}/{total}] Processing: `{email}`", parse_mode='Markdown')
+        else:
+            add_web_log(f"[{idx}/{total}] Processing: {email}", "cyan")
+        
+        res, err = fb_create_account(email, password, lang, c_fname, c_lname, use_proxy)
+        
+        if res:
+            success_count += 1
+            WEB_STATE["success"] = success_count
+            csv_ok = save_to_csv(res['uid'], res['cookie'], email)
+            csv_status = "✅ Saved to CSV" if csv_ok else "⚠️ CSV Save Failed"
+            
+            msg_text = f"✅ **ACCOUNT CREATED!**\n\n📧 Email: `{email}`\n👤 Name: `{res['firstname']} {res['lastname']}`\n🆔 UID: `{res['uid']}`\n🔑 Password: `{password}`\n\n🍪 Cookie: `{res['cookie']}`\n\n{csv_status}"
+            
+            if not is_web and chat_id:
+                bot.edit_message_text(msg_text, chat_id=chat_id, message_id=status_msg.message_id, parse_mode='Markdown')
+            else:
+                add_web_log(f"[+] SUCCESS: {email} | UID: {res['uid']}", "green")
+            
+            otp_ok = resend_otp(res['session'], res['uid'], res['proxy'])
+            otp_msg = '📩 OTP Sent!' if otp_ok else '❌ OTP Failed'
+            if not is_web and chat_id:
+                bot.send_message(chat_id, f"└─ {otp_msg} for `{email}`", parse_mode='Markdown')
+            else:
+                add_web_log(f"  └─ {otp_msg}", "green" if otp_ok else "red")
+        else:
+            save_failed_to_csv(email, err)
+            fail_text = f"❌ `{email}` Failed: {err}"
+            
+            if not is_web and chat_id:
+                bot.edit_message_text(fail_text, chat_id=chat_id, message_id=status_msg.message_id, parse_mode='Markdown')
+            else:
+                add_web_log(fail_text, "red")
+
+    with ThreadPoolExecutor(max_workers=len(emails)) as executor:
+        futures = [executor.submit(process_one, email, i+1, len(emails)) for i, email in enumerate(emails)]
+        for future in futures: future.result()
+
+    IS_RUNNING = False
+    finish_msg = f"🎉 **Batch Finished!**\nTotal Success: {success_count}/{len(emails)}"
+    
+    if not is_web and chat_id:
+        bot.send_message(chat_id, finish_msg + "\n\n📁 Tap 'Download' buttons to get your CSV files.", parse_mode='Markdown', reply_markup=get_main_menu())
+    else:
+        add_web_log(finish_msg, "yellow")
+
+# ══════════════════════════════════════════════════════════
+# WEB DASHBOARD (HTML/CSS/JS)
+# ══════════════════════════════════════════════════════════
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>FB Auto Creator Web</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0f172a; color: #e2e8f0; padding: 20px; margin: 0; }
+        .container { max-width: 800px; margin: auto; background: #1e293b; padding: 20px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.5); }
+        h2 { color: #38bdf8; text-align: center; }
+        label { font-size: 14px; color: #94a3b8; margin-bottom: 5px; display: block; }
+        textarea, input, select { width: 100%; padding: 10px; margin-bottom: 15px; background: #0f172a; color: #e2e8f0; border: 1px solid #334155; border-radius: 6px; box-sizing: border-box; }
+        .btn { width: 100%; padding: 12px; background: #0ea5e9; color: white; border: none; border-radius: 6px; font-weight: bold; cursor: pointer; font-size: 16px; }
+        .btn:hover { background: #0284c7; }
+        .btn:disabled { background: #475569; cursor: not-allowed; }
+        .btn-row { display: flex; gap: 10px; margin-bottom: 15px; }
+        .btn-row a { flex: 1; text-align: center; padding: 10px; background: #10b981; color: white; text-decoration: none; border-radius: 6px; font-weight: bold; }
+        .btn-row a.fail { background: #ef4444; }
+        #logs { background: #0f172a; height: 300px; overflow-y: auto; padding: 10px; border-radius: 6px; font-family: monospace; font-size: 13px; border: 1px solid #334155; }
+        .log-line { margin-bottom: 4px; }
+        .cyan { color: #22d3ee; } .green { color: #4ade80; } .red { color: #f87171; } .yellow { color: #fbbf24; } .white { color: #e2e8f0; }
+        .status-bar { background: #334155; padding: 10px; border-radius: 6px; margin-bottom: 15px; font-weight: bold; text-align: center; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h2>🚀 FB Auto Creator Web</h2>
+    <div class="status-bar" id="status">Status: Idle</div>
+
+    <label>Emails (One per line)</label>
+    <textarea id="emails" rows="4" placeholder="email1@domain.com&#10;email2@domain.com"></textarea>
+
+    <label>Password Mode</label>
+    <select id="passMode" onchange="togglePass()">
+        <option value="fix">Fix Password (SOHAVdd)</option>
+        <option value="custom">Custom Password</option>
+    </select>
+    <input type="text" id="customPass" placeholder="Enter Custom Password" style="display:none;">
+
+    <label>Proxy Mode</label>
+    <select id="proxyMode">
+        <option value="no">No Proxy (Direct)</option>
+        <option value="yes">Use Proxy (Auto from file)</option>
+    </select>
+
+    <label>Name Mode</label>
+    <select id="nameMode" onchange="toggleName()">
+        <option value="auto">Auto Name</option>
+        <option value="custom">Custom Name</option>
+    </select>
+    <input type="text" id="customName" placeholder="Firstname Lastname" style="display:none;">
+
+    <label>Language</label>
+    <select id="lang">
+        <option value="de">German (DE)</option>
+        <option value="fr">French (FR)</option>
+        <option value="br">Portuguese (BR)</option>
+        <option value="us">English (US)</option>
+    </select>
+
+    <button class="btn" id="startBtn" onclick="startBatch()">START PROCESS</button>
+
+    <div class="btn-row" style="margin-top: 15px;">
+        <a href="/download/success">Download Success CSV</a>
+        <a href="/download/failed" class="fail">Download Failed CSV</a>
+    </div>
+
+    <label style="margin-top: 15px;">Live Logs</label>
+    <div id="logs"></div>
+</div>
+
+<script>
+    function togglePass() {
+        document.getElementById('customPass').style.display = document.getElementById('passMode').value === 'custom' ? 'block' : 'none';
+    }
+    function toggleName() {
+        document.getElementById('customName').style.display = document.getElementById('nameMode').value === 'custom' ? 'block' : 'none';
+    }
+
+    async function startBatch() {
+        const emails = document.getElementById('emails').value.trim();
+        if (!emails) return alert("Please enter emails!");
+        
+        const passMode = document.getElementById('passMode').value;
+        const customPass = document.getElementById('customPass').value;
+        const proxyMode = document.getElementById('proxyMode').value;
+        const nameMode = document.getElementById('nameMode').value;
+        const customName = document.getElementById('customName').value;
+        const lang = document.getElementById('lang').value;
+
+        document.getElementById('startBtn').disabled = true;
+        document.getElementById('logs').innerHTML = '';
+
+        const res = await fetch('/api/start', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                emails: emails.split('\\n').map(e => e.trim()).filter(e => e),
+                pass_mode: passMode,
+                custom_pass: customPass,
+                proxy_mode: proxyMode,
+                name_mode: nameMode,
+                custom_name: customName,
+                lang: lang
+            })
+        });
+        
+        if (!res.ok) {
+            alert("Error starting batch");
+            document.getElementById('startBtn').disabled = false;
+        }
+    }
+
+    setInterval(async () => {
+        const res = await fetch('/api/status');
+        const data = await res.json();
+        
+        // Update status bar
+        if (data.is_running) {
+            document.getElementById('status').innerText = `Status: Running (${data.success}/${data.total})`;
+        } else {
+            document.getElementById('status').innerText = "Status: Idle";
+            document.getElementById('startBtn').disabled = false;
+        }
+
+        // Update logs
+        const logsDiv = document.getElementById('logs');
+        if (data.logs.length > 0) {
+            logsDiv.innerHTML = data.logs.map(l => `<div class="log-line ${l.color}">[${l.time}] ${l.msg}</div>`).join('');
+            logsDiv.scrollTop = logsDiv.scrollHeight;
+        }
+    }, 2000);
+</script>
+</body>
+</html>
+"""
+
+# ══════════════════════════════════════════════════════════
+# FLASK ROUTES (WEB API)
+# ══════════════════════════════════════════════════════════
+@app.route('/')
+def home():
+    return render_template_string(HTML_TEMPLATE)
+
+@app.route('/api/status')
+def get_status():
+    return jsonify({
+        "is_running": IS_RUNNING,
+        "success": WEB_STATE["success"],
+        "total": WEB_STATE["total"],
+        "logs": WEB_LOGS
+    })
+
+@app.route('/api/start', methods=['POST'])
+def api_start():
+    global IS_RUNNING, WEB_LOGS
+    if IS_RUNNING: return jsonify({"error": "Already running"}), 400
+    
+    data = request.json
+    emails = data.get('emails', [])
+    if not emails: return jsonify({"error": "No emails"}), 400
+    
+    # Password Logic
+    if data['pass_mode'] == 'fix':
+        tz = datetime.timezone(datetime.timedelta(hours=6))
+        day = datetime.datetime.now(tz).day
+        password = f"SOHAV{day}"
+    else:
+        password = data.get('custom_pass', '')
+        if not password: return jsonify({"error": "Password required"}), 400
+
+    use_proxy = data['proxy_mode'] == 'yes'
+    
+    # Name Logic
+    custom_name = None
+    if data['name_mode'] == 'custom' and data.get('custom_name'):
+        parts = data['custom_name'].split(' ')
+        if len(parts) >= 2: custom_name = (parts[0], " ".join(parts[1:]))
+        
+    lang = data.get('lang', 'us')
+    
+    WEB_LOGS = [] # Clear old logs
+    add_web_log(f"Starting process for {len(emails)} accounts...", "cyan")
+    
+    # Start Batch Thread
+    threading.Thread(target=execute_batch, args=(None, emails, password, lang, custom_name, use_proxy, True)).start()
+    return jsonify({"status": "started"})
+
+@app.route('/download/success')
+def download_success():
+    if os.path.exists(CSV_FILE):
+        return send_file(CSV_FILE, as_attachment=True)
+    return "File not found", 404
+
+@app.route('/download/failed')
+def download_failed():
+    if os.path.exists(FAILED_CSV_FILE):
+        return send_file(FAILED_CSV_FILE, as_attachment=True)
+    return "File not found", 404
+
+# ══════════════════════════════════════════════════════════
 # TELEGRAM BOT LOGIC
 # ══════════════════════════════════════════════════════════
 user_states = {}
@@ -279,10 +545,8 @@ def send_csv(message):
         try:
             with open(CSV_FILE, 'rb') as f:
                 bot.send_document(chat_id, f, caption="Here is your SUCCESS accounts CSV.")
-        except Exception as e:
-            bot.send_message(chat_id, f"Error reading file: {e}")
-    else:
-        bot.send_message(chat_id, "❌ No Success CSV found. Create accounts first!")
+        except Exception as e: bot.send_message(chat_id, f"Error reading file: {e}")
+    else: bot.send_message(chat_id, "❌ No Success CSV found. Create accounts first!")
 
 @bot.message_handler(commands=['getfailed'])
 @bot.message_handler(func=lambda message: message.text == '❌ Download Failed')
@@ -292,15 +556,14 @@ def send_failed_csv(message):
         try:
             with open(FAILED_CSV_FILE, 'rb') as f:
                 bot.send_document(chat_id, f, caption="Here is your FAILED accounts CSV.")
-        except Exception as e:
-            bot.send_message(chat_id, f"Error reading file: {e}")
-    else:
-        bot.send_message(chat_id, "❌ No Failed CSV found. Everything might be successful!")
+        except Exception as e: bot.send_message(chat_id, f"Error reading file: {e}")
+    else: bot.send_message(chat_id, "❌ No Failed CSV found. Everything might be successful!")
 
 @bot.message_handler(commands=['create'])
 @bot.message_handler(func=lambda message: message.text == '🚀 Create Account')
 def start_creation(message):
     chat_id = message.chat.id
+    if IS_RUNNING: return bot.send_message(chat_id, "⚠️ A process is already running! Please wait.")
     user_states[chat_id] = {'step': 'emails'}
     bot.send_message(chat_id, "📧 Paste your list of emails (one per line):", reply_markup=telebot.types.ReplyKeyboardRemove())
 
@@ -320,8 +583,7 @@ def handle_inputs(message):
         
         state['step'] = 'password_mode'
         msg = f"✅ Got {len(emails)} emails."
-        if auto_lang:
-            msg += f"\n(Auto Language detected: {auto_lang.upper()})"
+        if auto_lang: msg += f"\n(Auto Language detected: {auto_lang.upper()})"
             
         markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
         markup.add('Fix Password (SOHAVdd)', 'Custom Password')
@@ -329,21 +591,16 @@ def handle_inputs(message):
 
     elif state['step'] == 'password_mode':
         if 'Fix Password' in message.text:
-            # BANGLADESH TIME (UTC+6) REAL-TIME DATE FIX
             tz = datetime.timezone(datetime.timedelta(hours=6))
             day = datetime.datetime.now(tz).day
-            
             state['password'] = f"SOHAV{day}"
             state['step'] = 'proxy_mode'
-            
             bot.send_message(chat_id, f"✅ Fixed Password set to: `{state['password']}`", parse_mode='Markdown')
             show_proxy_menu(chat_id)
-            
         elif 'Custom Password' in message.text:
             state['step'] = 'custom_password'
             bot.send_message(chat_id, "✍️ Enter your Custom Password:", reply_markup=telebot.types.ReplyKeyboardRemove())
-        else:
-            bot.send_message(chat_id, "❌ Please select from the buttons.")
+        else: bot.send_message(chat_id, "❌ Please select from the buttons.")
 
     elif state['step'] == 'custom_password':
         state['password'] = message.text.strip()
@@ -357,8 +614,7 @@ def handle_inputs(message):
             state['use_proxy'] = False
             next_step = True
         elif 'Use Proxy' in choice:
-            if len(load_proxies()) == 0:
-                return bot.send_message(chat_id, "⚠️ No proxies found in proxies.txt! Please add some or select No Proxy.")
+            if len(load_proxies()) == 0: return bot.send_message(chat_id, "⚠️ No proxies found in proxies.txt! Please add some or select No Proxy.")
             state['use_proxy'] = True
             next_step = True
         else:
@@ -377,7 +633,6 @@ def handle_inputs(message):
             bot.send_message(chat_id, "✍️ Send: Firstname Lastname", reply_markup=telebot.types.ReplyKeyboardRemove())
         else:
             state['custom_name'] = None
-            
             if state.get('auto_lang'):
                 state['lang'] = state['auto_lang']
                 start_batch_from_state(chat_id, state)
@@ -424,49 +679,17 @@ def start_batch_from_state(chat_id, state):
     proxy_status = "Proxy ON" if state['use_proxy'] else "Direct IP"
     
     bot.send_message(chat_id, f"⚙️ Starting creation for {len(state['emails'])} accounts ({proxy_status} | Lang: {lang.upper()})...", reply_markup=get_main_menu())
-    threading.Thread(target=execute_batch, args=(chat_id, state['emails'], state['password'], lang, state['custom_name'], state['use_proxy'])).start()
-
-def execute_batch(chat_id, emails, password, lang, custom_name, use_proxy):
-    success_count = 0
-    
-    def process_one(email, idx, total):
-        nonlocal success_count
-        c_fname = custom_name[0] if custom_name else None
-        c_lname = custom_name[1] if custom_name else None
-        
-        status_msg = bot.send_message(chat_id, f"⏳ [{idx}/{total}] Processing: `{email}`", parse_mode='Markdown')
-        
-        res, err = fb_create_account(email, password, lang, c_fname, c_lname, use_proxy)
-        
-        if res:
-            success_count += 1
-            
-            csv_ok = save_to_csv(res['uid'], res['cookie'], email)
-            csv_status = "✅ Saved to CSV" if csv_ok else "⚠️ CSV Save Failed"
-            
-            msg = f"✅ **ACCOUNT CREATED!**\n\n📧 Email: `{email}`\n👤 Name: `{res['firstname']} {res['lastname']}`\n🆔 UID: `{res['uid']}`\n🔑 Password: `{password}`\n\n🍪 Cookie: `{res['cookie']}`\n\n{csv_status}"
-            bot.edit_message_text(msg, chat_id=chat_id, message_id=status_msg.message_id, parse_mode='Markdown')
-            
-            otp_ok = resend_otp(res['session'], res['uid'], res['proxy'])
-            bot.send_message(chat_id, f"└─ {'📩 OTP Sent!' if otp_ok else '❌ OTP Failed'} for `{email}`", parse_mode='Markdown')
-        else:
-            save_failed_to_csv(email, err)
-            
-            bot.edit_message_text(f"❌ [{idx}/{total}] `{email}` Failed: {err} (Saved to Failed CSV)", chat_id=chat_id, message_id=status_msg.message_id, parse_mode='Markdown')
-
-    with ThreadPoolExecutor(max_workers=len(emails)) as executor:
-        futures = [executor.submit(process_one, email, i+1, len(emails)) for i, email in enumerate(emails)]
-        for future in futures: future.result()
-
-    bot.send_message(chat_id, f"🎉 **Batch Finished!**\nTotal Success: {success_count}/{len(emails)}\n\n📁 Tap 'Download' buttons to get your CSV files.", parse_mode='Markdown', reply_markup=get_main_menu())
+    threading.Thread(target=execute_batch, args=(chat_id, state['emails'], state['password'], lang, state['custom_name'], state['use_proxy'], False)).start()
 
 # ══════════════════════════════════════════════════════════
 # START BOTH FLASK & BOT
 # ══════════════════════════════════════════════════════════
 if __name__ == '__main__':
-    t = threading.Thread(target=run_flask)
+    # Flask background e cholbe
+    t = threading.Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080))))
     t.daemon = True
     t.start()
     
-    print("Bot is running...")
+    print("Bot & Web Dashboard is running...")
+    # Telegram Bot main thread e cholbe
     bot.infinity_polling()
