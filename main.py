@@ -28,7 +28,7 @@ BOT_TOKEN = "9025360567:AAEJ2Jq2FSAVpDOVC3UCPYViQE9-sNI7NSk"
 bot = telebot.TeleBot(BOT_TOKEN)
 
 # ══════════════════════════════════════════════════════════
-# FLASK WEB SERVER (To keep Render awake)
+# FLASK WEB SERVER
 # ══════════════════════════════════════════════════════════
 app = Flask('')
 
@@ -46,25 +46,39 @@ def run_flask():
 FB_REG_BASE = "https://limited.facebook.com"
 GRAPHQL_URL = "https://web.facebook.com/api/graphql/"
 CSV_FILE = "fb_accounts.csv"
+FAILED_CSV_FILE = "failed_accounts.csv"
 PROXY_FILE = "proxies.txt" 
+
 file_lock = threading.Lock()
 
 # ══════════════════════════════════════════════════════════
-# CSV SAVER
+# CSV SAVERS
 # ══════════════════════════════════════════════════════════
 def save_to_csv(uid, cookie, email):
     try:
         with file_lock:
             file_exists = os.path.isfile(CSV_FILE)
-            # Append mode, newline='' is important for CSV
-            with open(CSV_FILE, mode='a', newline='', encoding='utf-8') as f:
-                writer = csv.writer(f)
-                if not file_exists:
-                    writer.writerow(['UID', 'COOKIE', 'MAIL']) # Header
+            with open(CSV_FILE, mode='a', newline='', encoding='utf-8-sig') as f:
+                writer = csv.writer(f, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
+                if not file_exists or os.path.getsize(CSV_FILE) == 0:
+                    writer.writerow(['UID', 'COOKIE', 'MAIL'])
                 writer.writerow([uid, cookie, email])
         return True
     except Exception as e:
         print(f"CSV Error: {e}")
+        return False
+
+def save_failed_to_csv(email, reason):
+    try:
+        with file_lock:
+            file_exists = os.path.isfile(FAILED_CSV_FILE)
+            with open(FAILED_CSV_FILE, mode='a', newline='', encoding='utf-8-sig') as f:
+                writer = csv.writer(f, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
+                if not file_exists or os.path.getsize(FAILED_CSV_FILE) == 0:
+                    writer.writerow(['MAIL', 'REASON'])
+                writer.writerow([email, reason])
+        return True
+    except Exception as e:
         return False
 
 # ══════════════════════════════════════════════════════════
@@ -102,6 +116,22 @@ GERMAN_FIRST_NAMES = ["Alexander", "Andreas", "Anna", "Anja", "Anke", "Anton", "
 GERMAN_LAST_NAMES = ["Albrecht", "Arnold", "Bachmann", "Bauer", "Baumann", "Becker", "Beckmann", "Berger", "Bergmann", "Böhm", "Brandt", "Braun", "Brinker", "Brunner", "Busch", "Dietrich", "Dörfler", "Dreher", "Ebert", "Eckert", "Engel", "Esser", "Falk", "Faust", "Fischer", "Fleischer", "Frank", "Franz", "Frey", "Fuchs"]
 PORTUGUESE_FIRST_NAMES = ["Miguel", "Arthur", "Gael", "Théo", "Heitor", "Ravi", "Davi", "Bernardo", "Noah", "Gabriel", "Samuel", "Pedro", "Anthony", "Lucas", "Benjamin", "Matheus", "Joaquim", "Nicolas", "Lorenzo", "Henrique", "João", "Rafael", "Enzo", "Murilo", "Benício", "Gustavo", "Guilherme", "Emanuel", "Felipe", "Bryan", "Daniel", "Vitor", "Leonardo", "Bruno", "Thiago", "Vicente", "Carlos", "Eduardo", "André", "Fernando"]
 PORTUGUESE_LAST_NAMES = ["Silva", "Santos", "Oliveira", "Souza", "Rodrigues", "Ferreira", "Alves", "Pereira", "Lima", "Gomes", "Costa", "Ribeiro", "Martins", "Carvalho", "Almeida", "Lopes", "Soares", "Fernandes", "Vieira", "Barbosa", "Rocha", "Dias", "Nascimento", "Andrade", "Moreira", "Nunes", "Marques", "Machado", "Mendes", "Freitas"]
+FRENCH_FIRST_NAMES = [
+    "Jean", "Pierre", "Michel", "André", "Philippe", "Louis", "Nicolas", "François", "Alain", "Julien",
+    "Bernard", "Marcel", "Daniel", "Paul", "Gérard", "Robert", "Patrick", "Henri", "Jacques", "Claude",
+    "Éric", "Christian", "Georges", "René", "Pascal", "David", "Olivier", "Laurent", "Stéphane", "Thierry",
+    "Thomas", "Sébastien", "Alexandre", "Vincent", "Christophe", "Maxime", "Jérôme", "Frédéric", "Xavier", "Fabrice",
+    "Mathieu", "Antoine", "Romain", "Benjamin", "Guillaume", "Damien", "Yves", "Hugo", "Lucas", "Jules",
+    "Léo", "Gabriel", "Raphaël", "Arthur", "Nathan", "Ethan", "Enzo", "Mathis", "Noah", "Tom"
+]
+FRENCH_LAST_NAMES = [
+    "Martin", "Bernard", "Thomas", "Petit", "Robert", "Richard", "Durand", "Dubois", "Moreau", "Laurent",
+    "Simon", "Michel", "Lefebvre", "Leroy", "Roux", "David", "Bertrand", "Morel", "Fournier", "Girard",
+    "Bonnet", "Dupont", "Lambert", "Fontaine", "Rousseau", "Vincent", "Muller", "Lefevre", "Faure", "Andre",
+    "Mercier", "Blanc", "Guerin", "Boyer", "Garnier", "Chevalier", "Francois", "Legrand", "Gauthier", "Garcia",
+    "Perrin", "Robin", "Clement", "Morin", "Nicolas", "Henry", "Roussel", "Mathieu", "Gautier", "Masson",
+    "Marchand", "Duval", "Denis", "Dumont", "Marie", "Lemaire", "Noel", "Meyer", "Dufour", "Meunier"
+]
 
 USER_AGENTS = [
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1",
@@ -163,6 +193,7 @@ def fb_create_account(email, password, lang_code, custom_fname, custom_lname, us
         if custom_fname and custom_lname: firstname, lastname = custom_fname, custom_lname
         elif lang_code == 'de': firstname, lastname = random.choice(GERMAN_FIRST_NAMES), random.choice(GERMAN_LAST_NAMES)
         elif lang_code == 'br': firstname, lastname = random.choice(PORTUGUESE_FIRST_NAMES), random.choice(PORTUGUESE_LAST_NAMES)
+        elif lang_code == 'fr': firstname, lastname = random.choice(FRENCH_FIRST_NAMES), random.choice(FRENCH_LAST_NAMES)
         else: firstname, lastname = random.choice(DEFAULT_FIRST_NAMES), random.choice(DEFAULT_LAST_NAMES)
         
         data = {
@@ -224,7 +255,7 @@ user_states = {}
 def get_main_menu():
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add(KeyboardButton('🚀 Create Account'))
-    markup.add(KeyboardButton('📁 Download CSV'))
+    markup.add(KeyboardButton('📁 Download Success'), KeyboardButton('❌ Download Failed'))
     return markup
 
 @bot.message_handler(commands=['start'])
@@ -232,17 +263,30 @@ def send_welcome(message):
     bot.reply_to(message, "Welcome to FB Auto Creator Bot! 🤖\n\nBot ready. Click below to start.", reply_markup=get_main_menu())
 
 @bot.message_handler(commands=['getcsv'])
-@bot.message_handler(func=lambda message: message.text == '📁 Download CSV')
+@bot.message_handler(func=lambda message: message.text == '📁 Download Success')
 def send_csv(message):
     chat_id = message.chat.id
     if os.path.exists(CSV_FILE):
         try:
             with open(CSV_FILE, 'rb') as f:
-                bot.send_document(chat_id, f, caption="Here is your CSV file with created accounts.")
+                bot.send_document(chat_id, f, caption="Here is your SUCCESS accounts CSV.")
         except Exception as e:
             bot.send_message(chat_id, f"Error reading file: {e}")
     else:
-        bot.send_message(chat_id, "❌ No CSV file found yet. Create some accounts first!")
+        bot.send_message(chat_id, "❌ No Success CSV found. Create accounts first!")
+
+@bot.message_handler(commands=['getfailed'])
+@bot.message_handler(func=lambda message: message.text == '❌ Download Failed')
+def send_failed_csv(message):
+    chat_id = message.chat.id
+    if os.path.exists(FAILED_CSV_FILE):
+        try:
+            with open(FAILED_CSV_FILE, 'rb') as f:
+                bot.send_document(chat_id, f, caption="Here is your FAILED accounts CSV.")
+        except Exception as e:
+            bot.send_message(chat_id, f"Error reading file: {e}")
+    else:
+        bot.send_message(chat_id, "❌ No Failed CSV found. Everything might be successful!")
 
 @bot.message_handler(commands=['create'])
 @bot.message_handler(func=lambda message: message.text == '🚀 Create Account')
@@ -344,7 +388,6 @@ def execute_batch(chat_id, emails, password, lang, custom_name, use_proxy):
         if res:
             success_count += 1
             
-            # Save directly to CSV
             csv_ok = save_to_csv(res['uid'], res['cookie'], email)
             csv_status = "✅ Saved to CSV" if csv_ok else "⚠️ CSV Save Failed"
             
@@ -354,13 +397,15 @@ def execute_batch(chat_id, emails, password, lang, custom_name, use_proxy):
             otp_ok = resend_otp(res['session'], res['uid'], res['proxy'])
             bot.send_message(chat_id, f"└─ {'📩 OTP Sent!' if otp_ok else '❌ OTP Failed'} for `{email}`", parse_mode='Markdown')
         else:
-            bot.edit_message_text(f"❌ [{idx}/{total}] `{email}` Failed: {err}", chat_id=chat_id, message_id=status_msg.message_id, parse_mode='Markdown')
+            save_failed_to_csv(email, err)
+            
+            bot.edit_message_text(f"❌ [{idx}/{total}] `{email}` Failed: {err} (Saved to Failed CSV)", chat_id=chat_id, message_id=status_msg.message_id, parse_mode='Markdown')
 
     with ThreadPoolExecutor(max_workers=len(emails)) as executor:
         futures = [executor.submit(process_one, email, i+1, len(emails)) for i, email in enumerate(emails)]
         for future in futures: future.result()
 
-    bot.send_message(chat_id, f"🎉 **Batch Finished!**\nTotal Success: {success_count}/{len(emails)}\n\n📁 Tap '📁 Download CSV' button to get your file.", parse_mode='Markdown', reply_markup=get_main_menu())
+    bot.send_message(chat_id, f"🎉 **Batch Finished!**\nTotal Success: {success_count}/{len(emails)}\n\n📁 Tap 'Download' buttons to get your CSV files.", parse_mode='Markdown', reply_markup=get_main_menu())
 
 # ══════════════════════════════════════════════════════════
 # START BOTH FLASK & BOT
