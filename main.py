@@ -52,6 +52,28 @@ PROXY_FILE = "proxies.txt"
 file_lock = threading.Lock()
 
 # ══════════════════════════════════════════════════════════
+# DOMAIN TO LANGUAGE MAP
+# ══════════════════════════════════════════════════════════
+DOMAIN_LANG_MAP = {
+    '.de': 'de', '.fr': 'fr', '.uk': 'gb', '.br': 'br', '.es': 'es', '.mx': 'mx',
+    '.it': 'it', '.ru': 'ru', '.in': 'in', '.pk': 'pk', '.bd': 'bd', '.id': 'id',
+    '.tr': 'tr', '.ph': 'ph', '.ng': 'ng', '.eg': 'eg', '.za': 'za', '.ca': 'ca',
+    '.au': 'au', '.nl': 'nl', '.pl': 'pl', '.se': 'se', '.vn': 'vn', '.th': 'th'
+}
+
+def get_lang_from_email(email):
+    domain = email.split('@')[-1].lower()
+    # Jodi .com diye sesh hoy, tobe language button dekhabe (None return korbe)
+    if domain.endswith('.com'):
+        return None 
+    
+    # Onno domain hole auto select korbe
+    for tld, lang in DOMAIN_LANG_MAP.items():
+        if domain.endswith(tld):
+            return lang
+    return None
+
+# ══════════════════════════════════════════════════════════
 # CSV SAVERS
 # ══════════════════════════════════════════════════════════
 def save_to_csv(uid, cookie, email):
@@ -106,32 +128,24 @@ LANG_MAP = {
     'br': ('pt-BR,pt;q=0.9,en;q=0.8', 'America/Sao_Paulo'), 'ru': ('ru-RU,ru;q=0.9,en;q=0.8', 'Europe/Moscow'),
     'it': ('it-IT,it;q=0.9,en;q=0.8', 'Europe/Rome'), 'ar': ('ar-SA,ar;q=0.9,en;q=0.8', 'Asia/Riyadh'),
     'pk': ('ur-PK,ur;q=0.9,en;q=0.8', 'Asia/Karachi'), 'ph': ('en-PH,en;q=0.9', 'Asia/Manila'),
-    'tr': ('tr-TR,tr;q=0.9,en;q=0.8', 'Europe/Istanbul'), 'in': ('hi-IN,hi;q=0.9,en;q=0.8', 'Asia/Kolkata')
+    'tr': ('tr-TR,tr;q=0.9,en;q=0.8', 'Europe/Istanbul'), 'in': ('hi-IN,hi;q=0.9,en;q=0.8', 'Asia/Kolkata'),
+    'ng': ('en-NG,en;q=0.9', 'Africa/Lagos'), 'eg': ('ar-EG,ar;q=0.9,en;q=0.8', 'Africa/Cairo'),
+    'za': ('en-ZA,en;q=0.9', 'Africa/Johannesburg'), 'ca': ('en-CA,en;q=0.9', 'America/Toronto'),
+    'au': ('en-AU,en;q=0.9', 'Australia/Sydney'), 'nl': ('nl-NL,nl;q=0.9,en;q=0.8', 'Europe/Amsterdam'),
+    'pl': ('pl-PL,pl;q=0.9,en;q=0.8', 'Europe/Warsaw'), 'se': ('sv-SE,sv;q=0.9,en;q=0.8', 'Europe/Stockholm'),
+    'vn': ('vi-VN,vi;q=0.9,en;q=0.8', 'Asia/Ho_Chi_Minh'), 'th': ('th-TH,th;q=0.9,en;q=0.8', 'Asia/Bangkok')
 }
 CURRENT_LANG_HEADER = "en-US,en;q=0.9"
 
+# NAME LISTS (Same as before)
 DEFAULT_FIRST_NAMES = ['Arafat', 'Rakib', 'Sabbir', 'Nayeem', 'Rifat', 'Tanvir', 'Shakib', 'Sajid', 'John', 'David', 'Michael', 'James']
 DEFAULT_LAST_NAMES = ['Hossain', 'Ahmed', 'Khan', 'Islam', 'Rahman', 'Sarker', 'Smith', 'Johnson', 'Williams', 'Brown']
 GERMAN_FIRST_NAMES = ["Alexander", "Andreas", "Anna", "Anja", "Anke", "Anton", "Armin", "Axel", "Barbara", "Bastian", "Benedikt", "Benjamin", "Bernd", "Birgit", "Björn", "Brigitte", "Bruno", "Carina", "Carla", "Charlotte", "Christian", "Christina", "Christof", "Claudia", "Claus", "Cornelia", "Daniel", "Daniela", "David", "Dennis"]
 GERMAN_LAST_NAMES = ["Albrecht", "Arnold", "Bachmann", "Bauer", "Baumann", "Becker", "Beckmann", "Berger", "Bergmann", "Böhm", "Brandt", "Braun", "Brinker", "Brunner", "Busch", "Dietrich", "Dörfler", "Dreher", "Ebert", "Eckert", "Engel", "Esser", "Falk", "Faust", "Fischer", "Fleischer", "Frank", "Franz", "Frey", "Fuchs"]
 PORTUGUESE_FIRST_NAMES = ["Miguel", "Arthur", "Gael", "Théo", "Heitor", "Ravi", "Davi", "Bernardo", "Noah", "Gabriel", "Samuel", "Pedro", "Anthony", "Lucas", "Benjamin", "Matheus", "Joaquim", "Nicolas", "Lorenzo", "Henrique", "João", "Rafael", "Enzo", "Murilo", "Benício", "Gustavo", "Guilherme", "Emanuel", "Felipe", "Bryan", "Daniel", "Vitor", "Leonardo", "Bruno", "Thiago", "Vicente", "Carlos", "Eduardo", "André", "Fernando"]
 PORTUGUESE_LAST_NAMES = ["Silva", "Santos", "Oliveira", "Souza", "Rodrigues", "Ferreira", "Alves", "Pereira", "Lima", "Gomes", "Costa", "Ribeiro", "Martins", "Carvalho", "Almeida", "Lopes", "Soares", "Fernandes", "Vieira", "Barbosa", "Rocha", "Dias", "Nascimento", "Andrade", "Moreira", "Nunes", "Marques", "Machado", "Mendes", "Freitas"]
-FRENCH_FIRST_NAMES = [
-    "Jean", "Pierre", "Michel", "André", "Philippe", "Louis", "Nicolas", "François", "Alain", "Julien",
-    "Bernard", "Marcel", "Daniel", "Paul", "Gérard", "Robert", "Patrick", "Henri", "Jacques", "Claude",
-    "Éric", "Christian", "Georges", "René", "Pascal", "David", "Olivier", "Laurent", "Stéphane", "Thierry",
-    "Thomas", "Sébastien", "Alexandre", "Vincent", "Christophe", "Maxime", "Jérôme", "Frédéric", "Xavier", "Fabrice",
-    "Mathieu", "Antoine", "Romain", "Benjamin", "Guillaume", "Damien", "Yves", "Hugo", "Lucas", "Jules",
-    "Léo", "Gabriel", "Raphaël", "Arthur", "Nathan", "Ethan", "Enzo", "Mathis", "Noah", "Tom"
-]
-FRENCH_LAST_NAMES = [
-    "Martin", "Bernard", "Thomas", "Petit", "Robert", "Richard", "Durand", "Dubois", "Moreau", "Laurent",
-    "Simon", "Michel", "Lefebvre", "Leroy", "Roux", "David", "Bertrand", "Morel", "Fournier", "Girard",
-    "Bonnet", "Dupont", "Lambert", "Fontaine", "Rousseau", "Vincent", "Muller", "Lefevre", "Faure", "Andre",
-    "Mercier", "Blanc", "Guerin", "Boyer", "Garnier", "Chevalier", "Francois", "Legrand", "Gauthier", "Garcia",
-    "Perrin", "Robin", "Clement", "Morin", "Nicolas", "Henry", "Roussel", "Mathieu", "Gautier", "Masson",
-    "Marchand", "Duval", "Denis", "Dumont", "Marie", "Lemaire", "Noel", "Meyer", "Dufour", "Meunier"
-]
+FRENCH_FIRST_NAMES = ["Jean", "Pierre", "Michel", "André", "Philippe", "Louis", "Nicolas", "François", "Alain", "Julien", "Bernard", "Marcel", "Daniel", "Paul", "Gérard", "Robert", "Patrick", "Henri", "Jacques", "Claude", "Éric", "Christian", "Georges", "René", "Pascal", "David", "Olivier", "Laurent", "Stéphane", "Thierry", "Thomas", "Sébastien", "Alexandre", "Vincent", "Christophe", "Maxime", "Jérôme", "Frédéric", "Xavier", "Fabrice", "Mathieu", "Antoine", "Romain", "Benjamin", "Guillaume", "Damien", "Yves", "Hugo", "Lucas", "Jules", "Léo", "Gabriel", "Raphaël", "Arthur", "Nathan", "Ethan", "Enzo", "Mathis", "Noah", "Tom"]
+FRENCH_LAST_NAMES = ["Martin", "Bernard", "Thomas", "Petit", "Robert", "Richard", "Durand", "Dubois", "Moreau", "Laurent", "Simon", "Michel", "Lefebvre", "Leroy", "Roux", "David", "Bertrand", "Morel", "Fournier", "Girard", "Bonnet", "Dupont", "Lambert", "Fontaine", "Rousseau", "Vincent", "Muller", "Lefevre", "Faure", "Andre", "Mercier", "Blanc", "Guerin", "Boyer", "Garnier", "Chevalier", "Francois", "Legrand", "Gauthier", "Garcia", "Perrin", "Robin", "Clement", "Morin", "Nicolas", "Henry", "Roussel", "Mathieu", "Gautier", "Masson", "Marchand", "Duval", "Denis", "Dumont", "Marie", "Lemaire", "Noel", "Meyer", "Dufour", "Meunier"]
 
 USER_AGENTS = [
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1",
@@ -305,8 +319,16 @@ def handle_inputs(message):
         emails = [l.strip() for l in message.text.split('\n') if '@' in l]
         if not emails: return bot.send_message(chat_id, "❌ Invalid format. Send valid emails.")
         state['emails'] = emails
+        
+        # AUTO LANGUAGE DETECTION
+        auto_lang = get_lang_from_email(emails[0])
+        state['auto_lang'] = auto_lang
+        
         state['step'] = 'password'
-        bot.send_message(chat_id, f"✅ Got {len(emails)} emails.\n🔐 Enter Password:")
+        msg = f"✅ Got {len(emails)} emails.\n🔐 Enter Password:"
+        if auto_lang:
+            msg += f"\n(Auto Language detected: {auto_lang.upper()})"
+        bot.send_message(chat_id, msg)
 
     elif state['step'] == 'password':
         state['password'] = message.text.strip()
@@ -345,33 +367,49 @@ def handle_inputs(message):
             bot.send_message(chat_id, "✍️ Send: Firstname Lastname", reply_markup=telebot.types.ReplyKeyboardRemove())
         else:
             state['custom_name'] = None
-            state['step'] = 'language'
-            show_languages(chat_id)
+            
+            # CHECK IF AUTO LANGUAGE IS PRESENT
+            if state.get('auto_lang'):
+                state['lang'] = state['auto_lang']
+                start_batch_from_state(chat_id, state)
+            else:
+                state['step'] = 'language'
+                show_languages(chat_id)
 
     elif state['step'] == 'custom_name':
         parts = message.text.strip().split(' ')
         if len(parts) < 2: return bot.send_message(chat_id, "❌ Invalid format. Use: Firstname Lastname")
         state['custom_name'] = (parts[0], " ".join(parts[1:]))
-        state['step'] = 'language'
-        show_languages(chat_id)
+        
+        # CHECK IF AUTO LANGUAGE IS PRESENT
+        if state.get('auto_lang'):
+            state['lang'] = state['auto_lang']
+            start_batch_from_state(chat_id, state)
+        else:
+            state['step'] = 'language'
+            show_languages(chat_id)
 
     elif state['step'] == 'language':
         state['lang'] = message.text.strip().lower()[:2]
-        state['step'] = None
-        
-        global CURRENT_LANG_HEADER
-        if state['lang'] in LANG_MAP: CURRENT_LANG_HEADER = LANG_MAP[state['lang']][0]
-        else: CURRENT_LANG_HEADER = LANG_MAP['us'][0]
-        
-        proxy_status = "Proxy ON" if state['use_proxy'] else "Direct IP"
-        bot.send_message(chat_id, f"⚙️ Starting creation for {len(state['emails'])} accounts ({proxy_status})...", reply_markup=get_main_menu())
-        threading.Thread(target=execute_batch, args=(chat_id, state['emails'], state['password'], state['lang'], state['custom_name'], state['use_proxy'])).start()
+        start_batch_from_state(chat_id, state)
 
 def show_languages(chat_id):
     markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True, row_width=4)
     buttons = [KeyboardButton(code) for code in LANG_MAP.keys()]
     markup.add(*buttons)
     bot.send_message(chat_id, "🌍 Select Language Code:", reply_markup=markup)
+
+def start_batch_from_state(chat_id, state):
+    global CURRENT_LANG_HEADER
+    lang = state['lang']
+    if lang in LANG_MAP: CURRENT_LANG_HEADER = LANG_MAP[lang][0]
+    else: CURRENT_LANG_HEADER = LANG_MAP['us'][0]
+    
+    state['step'] = None
+    proxy_status = "Proxy ON" if state['use_proxy'] else "Direct IP"
+    
+    bot.send_message(chat_id, f"⚙️ Starting creation for {len(state['emails'])} accounts ({proxy_status} | Lang: {lang.upper()})...", reply_markup=get_main_menu())
+    threading.Thread(target=execute_batch, args=(chat_id, state['emails'], state['password'], lang, state['custom_name'], state['use_proxy'])).start()
 
 def execute_batch(chat_id, emails, password, lang, custom_name, use_proxy):
     success_count = 0
