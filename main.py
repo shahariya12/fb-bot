@@ -12,6 +12,7 @@ import hashlib
 import string
 import threading
 import csv
+import datetime
 from concurrent.futures import ThreadPoolExecutor
 from flask import Flask
 
@@ -63,14 +64,9 @@ DOMAIN_LANG_MAP = {
 
 def get_lang_from_email(email):
     domain = email.split('@')[-1].lower()
-    # Jodi .com diye sesh hoy, tobe language button dekhabe (None return korbe)
-    if domain.endswith('.com'):
-        return None 
-    
-    # Onno domain hole auto select korbe
+    if domain.endswith('.com'): return None 
     for tld, lang in DOMAIN_LANG_MAP.items():
-        if domain.endswith(tld):
-            return lang
+        if domain.endswith(tld): return lang
     return None
 
 # ══════════════════════════════════════════════════════════
@@ -87,7 +83,6 @@ def save_to_csv(uid, cookie, email):
                 writer.writerow([uid, cookie, email])
         return True
     except Exception as e:
-        print(f"CSV Error: {e}")
         return False
 
 def save_failed_to_csv(email, reason):
@@ -104,7 +99,7 @@ def save_failed_to_csv(email, reason):
         return False
 
 # ══════════════════════════════════════════════════════════
-# PROXY & DB
+# PROXY
 # ══════════════════════════════════════════════════════════
 def load_proxies():
     if os.path.exists(PROXY_FILE):
@@ -137,7 +132,7 @@ LANG_MAP = {
 }
 CURRENT_LANG_HEADER = "en-US,en;q=0.9"
 
-# NAME LISTS (Same as before)
+# NAME LISTS
 DEFAULT_FIRST_NAMES = ['Arafat', 'Rakib', 'Sabbir', 'Nayeem', 'Rifat', 'Tanvir', 'Shakib', 'Sajid', 'John', 'David', 'Michael', 'James']
 DEFAULT_LAST_NAMES = ['Hossain', 'Ahmed', 'Khan', 'Islam', 'Rahman', 'Sarker', 'Smith', 'Johnson', 'Williams', 'Brown']
 GERMAN_FIRST_NAMES = ["Alexander", "Andreas", "Anna", "Anja", "Anke", "Anton", "Armin", "Axel", "Barbara", "Bastian", "Benedikt", "Benjamin", "Bernd", "Birgit", "Björn", "Brigitte", "Bruno", "Carina", "Carla", "Charlotte", "Christian", "Christina", "Christof", "Claudia", "Claus", "Cornelia", "Daniel", "Daniela", "David", "Dennis"]
@@ -320,26 +315,39 @@ def handle_inputs(message):
         if not emails: return bot.send_message(chat_id, "❌ Invalid format. Send valid emails.")
         state['emails'] = emails
         
-        # AUTO LANGUAGE DETECTION
         auto_lang = get_lang_from_email(emails[0])
         state['auto_lang'] = auto_lang
         
-        state['step'] = 'password'
-        msg = f"✅ Got {len(emails)} emails.\n🔐 Enter Password:"
+        state['step'] = 'password_mode'
+        msg = f"✅ Got {len(emails)} emails."
         if auto_lang:
             msg += f"\n(Auto Language detected: {auto_lang.upper()})"
-        bot.send_message(chat_id, msg)
+            
+        markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
+        markup.add('Fix Password (SOHAVdd)', 'Custom Password')
+        bot.send_message(chat_id, msg + "\n🔐 Select Password Mode:", reply_markup=markup)
 
-    elif state['step'] == 'password':
+    elif state['step'] == 'password_mode':
+        if 'Fix Password' in message.text:
+            day = datetime.datetime.now().day
+            # Pad day with 0 if needed (e.g., 05) or just use day
+            state['password'] = f"SOHAV{day}"
+            state['step'] = 'proxy_mode'
+            
+            bot.send_message(chat_id, f"✅ Fixed Password set to: `{state['password']}`", parse_mode='Markdown')
+            show_proxy_menu(chat_id)
+            
+        elif 'Custom Password' in message.text:
+            state['step'] = 'custom_password'
+            bot.send_message(chat_id, "✍️ Enter your Custom Password:", reply_markup=telebot.types.ReplyKeyboardRemove())
+        else:
+            bot.send_message(chat_id, "❌ Please select from the buttons.")
+
+    elif state['step'] == 'custom_password':
         state['password'] = message.text.strip()
         state['step'] = 'proxy_mode'
-        
-        proxy_count = len(load_proxies())
-        proxy_text = f"Use Proxy ({proxy_count} Loaded)" if proxy_count > 0 else "Use Proxy (0 Loaded)"
-        
-        markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
-        markup.add('No Proxy (Direct)', proxy_text)
-        bot.send_message(chat_id, "🌐 Select Proxy Mode:", reply_markup=markup)
+        bot.send_message(chat_id, f"✅ Custom Password set.")
+        show_proxy_menu(chat_id)
 
     elif state['step'] == 'proxy_mode':
         choice = message.text
@@ -368,7 +376,6 @@ def handle_inputs(message):
         else:
             state['custom_name'] = None
             
-            # CHECK IF AUTO LANGUAGE IS PRESENT
             if state.get('auto_lang'):
                 state['lang'] = state['auto_lang']
                 start_batch_from_state(chat_id, state)
@@ -381,7 +388,6 @@ def handle_inputs(message):
         if len(parts) < 2: return bot.send_message(chat_id, "❌ Invalid format. Use: Firstname Lastname")
         state['custom_name'] = (parts[0], " ".join(parts[1:]))
         
-        # CHECK IF AUTO LANGUAGE IS PRESENT
         if state.get('auto_lang'):
             state['lang'] = state['auto_lang']
             start_batch_from_state(chat_id, state)
@@ -392,6 +398,13 @@ def handle_inputs(message):
     elif state['step'] == 'language':
         state['lang'] = message.text.strip().lower()[:2]
         start_batch_from_state(chat_id, state)
+
+def show_proxy_menu(chat_id):
+    proxy_count = len(load_proxies())
+    proxy_text = f"Use Proxy ({proxy_count} Loaded)" if proxy_count > 0 else "Use Proxy (0 Loaded)"
+    markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
+    markup.add('No Proxy (Direct)', proxy_text)
+    bot.send_message(chat_id, "🌐 Select Proxy Mode:", reply_markup=markup)
 
 def show_languages(chat_id):
     markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True, row_width=4)
