@@ -329,8 +329,10 @@ def handle_inputs(message):
 
     elif state['step'] == 'password_mode':
         if 'Fix Password' in message.text:
-            day = datetime.datetime.now().day
-            # Pad day with 0 if needed (e.g., 05) or just use day
+            # BANGLADESH TIME (UTC+6) REAL-TIME DATE FIX
+            tz = datetime.timezone(datetime.timedelta(hours=6))
+            day = datetime.datetime.now(tz).day
+            
             state['password'] = f"SOHAV{day}"
             state['step'] = 'proxy_mode'
             
