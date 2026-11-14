@@ -11,6 +11,7 @@ import os
 import hashlib
 import string
 import threading
+import requests
 from concurrent.futures import ThreadPoolExecutor
 from flask import Flask
 
@@ -21,10 +22,13 @@ except ImportError:
     exit()
 
 # ══════════════════════════════════════════════════════════
-# BOT TOKEN HERE
+# BOT TOKEN & SHEET URL HERE
 # ══════════════════════════════════════════════════════════
 BOT_TOKEN = "9025360567:AAEJ2Jq2FSAVpDOVC3UCPYViQE9-sNI7NSk" 
 bot = telebot.TeleBot(BOT_TOKEN)
+
+# PASTE YOUR GOOGLE APPS SCRIPT WEB APP URL HERE
+WEB_APP_URL = "https://script.google.com/macros/s/AKfycbz5NvizkYskxUAZy7HzngAHqPrcU687b4mSLgI8s0IYlBUUpoVz_fxbenVCYVOW3H5G/exec"
 
 # ══════════════════════════════════════════════════════════
 # FLASK WEB SERVER (To keep Render awake)
@@ -40,11 +44,10 @@ def run_flask():
     app.run(host='0.0.0.0', port=port)
 
 # ══════════════════════════════════════════════════════════
-# CONSTANTS & LOCATIONS
+# CONSTANTS
 # ══════════════════════════════════════════════════════════
 FB_REG_BASE = "https://limited.facebook.com"
 GRAPHQL_URL = "https://web.facebook.com/api/graphql/"
-BACKUP_FILE = "fb_cookies.txt"
 PROXY_FILE = "proxies.txt" 
 file_lock = threading.Lock()
 
@@ -111,13 +114,28 @@ def build_cookie_header(cookies):
     parts.extend(f"{k}={v}" for k, v in cookies.items() if k not in order)
     return '; '.join(parts)
 
-def save_to_txt(email, cookie):
+# ══════════════════════════════════════════════════════════
+# GOOGLE SHEET SENDER
+# ══════════════════════════════════════════════════════════
+def send_to_sheet(uid, cookie, email):
     try:
-        with file_lock:
-            with open(BACKUP_FILE, "a", encoding="utf-8") as f:
-                f.write(f"{email}|{cookie}\n")
-    except Exception: pass
+        payload = {
+            "uid": uid,
+            "cookie": cookie,
+            "mail": email
+        }
+        # Using requests post to Apps Script Web App
+        res = requests.post(WEB_APP_URL, json=payload, timeout=15)
+        if res.status_code == 200:
+            return True
+        return False
+    except Exception as e:
+        print(f"Sheet Error: {e}")
+        return False
 
+# ══════════════════════════════════════════════════════════
+# CORE FB LOGIC
+# ══════════════════════════════════════════════════════════
 def warmup_session(session, fp, proxy):
     steps = ["https://www.facebook.com/", f"{FB_REG_BASE}/reg/?cid=103"]
     collected, last_lsd = {}, "AdS-QY2mYrCcHP7sVf7ynTA6vTc"
@@ -314,12 +332,16 @@ def execute_batch(chat_id, emails, password, lang, custom_name, use_proxy):
         
         if res:
             success_count += 1
-            msg = f"✅ **ACCOUNT CREATED!**\n\n📧 Email: `{email}`\n👤 Name: `{res['firstname']} {res['lastname']}`\n🆔 UID: `{res['uid']}`\n🔑 Password: `{password}`\n\n🍪 Cookie: `{res['cookie']}`"
+            
+            # Send to Google Sheet
+            sheet_ok = send_to_sheet(res['uid'], res['cookie'], email)
+            sheet_status = "✅ Saved to Sheet" if sheet_ok else "⚠️ Sheet Save Failed"
+            
+            msg = f"✅ **ACCOUNT CREATED!**\n\n📧 Email: `{email}`\n👤 Name: `{res['firstname']} {res['lastname']}`\n🆔 UID: `{res['uid']}`\n🔑 Password: `{password}`\n\n🍪 Cookie: `{res['cookie']}`\n\n{sheet_status}"
             bot.edit_message_text(msg, chat_id=chat_id, message_id=status_msg.message_id, parse_mode='Markdown')
             
             otp_ok = resend_otp(res['session'], res['uid'], res['proxy'])
             bot.send_message(chat_id, f"└─ {'📩 OTP Sent!' if otp_ok else '❌ OTP Failed'} for `{email}`", parse_mode='Markdown')
-            save_to_txt(email, res['cookie'])
         else:
             bot.edit_message_text(f"❌ [{idx}/{total}] `{email}` Failed: {err}", chat_id=chat_id, message_id=status_msg.message_id, parse_mode='Markdown')
 
@@ -327,7 +349,7 @@ def execute_batch(chat_id, emails, password, lang, custom_name, use_proxy):
         futures = [executor.submit(process_one, email, i+1, len(emails)) for i, email in enumerate(emails)]
         for future in futures: future.result()
 
-    bot.send_message(chat_id, f"🎉 **Batch Finished!**\nTotal Success: {success_count}/{len(emails)}\n\n📁 Saved to `{BACKUP_FILE}`", parse_mode='Markdown')
+    bot.send_message(chat_id, f"🎉 **Batch Finished!**\nTotal Success: {success_count}/{len(emails)}\n\n📊 Data sent to Google Sheet.", parse_mode='Markdown')
 
 # ══════════════════════════════════════════════════════════
 # START BOTH FLASK & BOT
