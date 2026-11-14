@@ -36,7 +36,6 @@ def home():
     return "Bot is alive and running!"
 
 def run_flask():
-    # Render automatically assigns a PORT, fallback to 8080
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port)
 
@@ -50,7 +49,7 @@ PROXY_FILE = "proxies.txt"
 file_lock = threading.Lock()
 
 # ══════════════════════════════════════════════════════════
-# PROXY & DB (Same as before)
+# PROXY & DB
 # ══════════════════════════════════════════════════════════
 def load_proxies():
     if os.path.exists(PROXY_FILE):
@@ -132,9 +131,10 @@ def warmup_session(session, fp, proxy):
         except: time.sleep(1)
     return collected, last_lsd
 
-def fb_create_account(email, password, lang_code, custom_fname, custom_lname):
+def fb_create_account(email, password, lang_code, custom_fname, custom_lname, use_proxy):
     session = cureq.Session()
-    proxy = get_random_proxy()
+    proxy = get_random_proxy() if use_proxy else None
+    
     fp = build_fingerprint()
     cookies_warm, lsd_token = warmup_session(session, fp, proxy)
     time.sleep(random.uniform(2.0, 4.0))
@@ -172,7 +172,7 @@ def fb_create_account(email, password, lang_code, custom_fname, custom_lname):
         time.sleep(random.uniform(3.0, 6.0))
         r = session.post(f"{FB_REG_BASE}/reg/submit/?app_id=103&multi_step_form=1", headers=headers, data=data, impersonate=reg_fp["impersonate"], proxies=proxy, timeout=30)
     except Exception as e:
-        return (None, f'POST_FAIL (Check Proxy)')
+        return (None, f'POST_FAIL (Check Proxy/Net)')
 
     cookies = session.cookies.get_dict()
     uid = cookies.get('c_user')
@@ -237,10 +237,34 @@ def handle_inputs(message):
 
     elif state['step'] == 'password':
         state['password'] = message.text.strip()
-        state['step'] = 'name_mode'
+        state['step'] = 'proxy_mode'
+        
+        proxy_count = len(load_proxies())
+        proxy_text = f"Use Proxy ({proxy_count} Loaded)" if proxy_count > 0 else "Use Proxy (0 Loaded)"
+        
         markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
-        markup.add('Auto Name', 'Custom Name')
-        bot.send_message(chat_id, "👤 Select Name Mode:", reply_markup=markup)
+        markup.add('No Proxy (Direct)', proxy_text)
+        bot.send_message(chat_id, "🌐 Select Proxy Mode:", reply_markup=markup)
+
+    elif state['step'] == 'proxy_mode':
+        choice = message.text
+        if 'No Proxy' in choice:
+            state['use_proxy'] = False
+            next_step = True
+        elif 'Use Proxy' in choice:
+            if len(load_proxies()) == 0:
+                return bot.send_message(chat_id, "⚠️ No proxies found in proxies.txt! Please add some or select No Proxy.")
+            state['use_proxy'] = True
+            next_step = True
+        else:
+            next_step = False
+            bot.send_message(chat_id, "❌ Please select from the buttons.")
+
+        if next_step:
+            state['step'] = 'name_mode'
+            markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
+            markup.add('Auto Name', 'Custom Name')
+            bot.send_message(chat_id, "👤 Select Name Mode:", reply_markup=markup)
 
     elif state['step'] == 'name_mode':
         if message.text == 'Custom Name':
@@ -266,11 +290,9 @@ def handle_inputs(message):
         if state['lang'] in LANG_MAP: CURRENT_LANG_HEADER = LANG_MAP[state['lang']][0]
         else: CURRENT_LANG_HEADER = LANG_MAP['us'][0]
         
-        proxy_count = len(load_proxies())
-        proxy_info = f"({proxy_count} Proxies Loaded)" if proxy_count > 0 else "(No Proxies - Might Checkpoint)"
-
-        bot.send_message(chat_id, f"⚙️ Starting creation for {len(state['emails'])} accounts {proxy_info}...", reply_markup=get_main_menu())
-        threading.Thread(target=execute_batch, args=(chat_id, state['emails'], state['password'], state['lang'], state['custom_name'])).start()
+        proxy_status = "Proxy ON" if state['use_proxy'] else "Direct IP"
+        bot.send_message(chat_id, f"⚙️ Starting creation for {len(state['emails'])} accounts ({proxy_status})...", reply_markup=get_main_menu())
+        threading.Thread(target=execute_batch, args=(chat_id, state['emails'], state['password'], state['lang'], state['custom_name'], state['use_proxy'])).start()
 
 def show_languages(chat_id):
     markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True, row_width=4)
@@ -278,7 +300,7 @@ def show_languages(chat_id):
     markup.add(*buttons)
     bot.send_message(chat_id, "🌍 Select Language Code:", reply_markup=markup)
 
-def execute_batch(chat_id, emails, password, lang, custom_name):
+def execute_batch(chat_id, emails, password, lang, custom_name, use_proxy):
     success_count = 0
     
     def process_one(email, idx, total):
@@ -288,7 +310,7 @@ def execute_batch(chat_id, emails, password, lang, custom_name):
         
         status_msg = bot.send_message(chat_id, f"⏳ [{idx}/{total}] Processing: `{email}`", parse_mode='Markdown')
         
-        res, err = fb_create_account(email, password, lang, c_fname, c_lname)
+        res, err = fb_create_account(email, password, lang, c_fname, c_lname, use_proxy)
         
         if res:
             success_count += 1
@@ -311,11 +333,9 @@ def execute_batch(chat_id, emails, password, lang, custom_name):
 # START BOTH FLASK & BOT
 # ══════════════════════════════════════════════════════════
 if __name__ == '__main__':
-    # Start Flask in a background thread
     t = threading.Thread(target=run_flask)
     t.daemon = True
     t.start()
     
-    # Start Telegram Bot in main thread
     print("Bot is running...")
     bot.infinity_polling()
