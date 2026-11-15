@@ -14,8 +14,10 @@ import threading
 import csv
 import datetime
 import requests
+import io
 from concurrent.futures import ThreadPoolExecutor
 from flask import Flask, request, jsonify, send_file, render_template_string, session, redirect, url_for
+from supabase import create_client, Client
 
 try:
     from curl_cffi import requests as cureq
@@ -24,16 +26,86 @@ except ImportError:
     exit()
 
 # ══════════════════════════════════════════════════════════
-# BOT SETTINGS
+# CONFIGURATIONS & DATABASE (Ekhane Supabase Link Boshao)
 # ══════════════════════════════════════════════════════════
-BOT_TOKEN_1 = "9025360567:AAEJ2Jq2FSAVpDOVC3UCPYViQE9-sNI7NSk" # Main Bot
-BOT_TOKEN_2 = "9028640496:AAG8y-z28g98sjYfEjLC5yanhhA-YgP9zHQ" # Download Bot
+BOT_TOKEN_1 = "9025360567:AAEJ2Jq2FSAVpDOVC3UCPYViQE9-sNI7NSk"
+BOT_TOKEN_2 = "9028640496:AAG8y-z28g98sjYfEjLC5yanhhA-YgP9zHQ"
+ADMIN_ID = "6408202140"
+WEB_PASSWORD = "SOHAV_ADMIN"
+
+SUPABASE_URL = "https://plojfqqvqnddxibaxrqr.supabase.co/rest/v1/" # <-- Tomar Project URL
+SUPABASE_KEY = "your-anon-key" # <-- Tomar anon key
+
+try:
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+except Exception as e:
+    print(f"Supabase Connection Error: {e}")
 
 bot1 = telebot.TeleBot(BOT_TOKEN_1)
 bot2 = telebot.TeleBot(BOT_TOKEN_2)
 
-ADMIN_ID = "6408202140"
-WEB_PASSWORD = "SOHAV_ADMIN"
+# ══════════════════════════════════════════════════════════
+# GLOBAL VARIABLES
+# ══════════════════════════════════════════════════════════
+IS_RUNNING = False
+CANCEL_FLAG = False
+WEB_OTPS = []
+
+# ══════════════════════════════════════════════════════════
+# 50 ANDROID USER-AGENTS
+# ══════════════════════════════════════════════════════════
+ANDROID_USER_AGENTS = [
+    "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 14; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.6422.147 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.113 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 12; SM-A525F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.6312.118 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 11; M2101K6G) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.6261.119 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 10; SM-G973F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.6167.165 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.6478.122 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 13; CPH2447) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.6422.147 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 12; V2134) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.113 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 11; RMX3085) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.6312.118 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 10; Redmi Note 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.6261.119 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 14; SM-F946B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.6533.103 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 13; Pixel 6a) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.6478.122 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 12; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.6422.147 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 11; moto g(60)) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.113 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 10; Nokia G20) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.6312.118 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 14; SM-S928B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.6613.88 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 13; 2201117TG) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.6533.103 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 12; CPH2387) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.6478.122 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 11; V2307) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.6422.147 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 10; SM-A515F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.113 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 14; Pixel Fold) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.6668.81 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 13; SM-A546B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.6613.88 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 12; 23021RAAEG) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.6533.103 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 11; TECNO KE5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.6478.122 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 10; Infinix X6811) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.6422.147 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 14; SM-S911B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.6723.58 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 13; Pixel 7 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.6668.81 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 12; RMX3741) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.6613.88 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 11; CPH2499) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.6533.103 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 10; SM-M325F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.6478.122 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 14; SM-G996B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.39 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 13; 220333QNY) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.6723.58 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 12; V2225) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.6668.81 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 11; moto g84 5G) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.6613.88 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 10; Pixel 4a) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.6533.103 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 14; SM-A346E) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.6834.79 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 13; SM-S911U) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.39 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 12; Nokia X20) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.6723.58 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 11; Infinix X6837) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.6668.81 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 10; TECNO LH7n) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.6613.88 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.6943.42 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 13; SM-A145F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.6834.79 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 12; Redmi Note 11) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.39 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 11; CPH2461) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.6723.58 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 10; SM-A135F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.6668.81 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 14; SM-M515F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.6998.135 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 13; V2307) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.6943.42 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 12; RMX3630) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.6834.79 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 11; moto g(30)) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.39 Mobile Safari/537.36"
+]
 
 # ══════════════════════════════════════════════════════════
 # FLASK WEB SERVER SETUP
@@ -41,9 +113,6 @@ WEB_PASSWORD = "SOHAV_ADMIN"
 app = Flask('')
 app.secret_key = "SOHAV_SECRET_KEY_123"
 WEB_LOGS = []
-WEB_OTPS = [] # <--- NEW: OTPs for Web UI
-IS_RUNNING = False
-CANCEL_FLAG = False
 WEB_STATE = {"total": 0, "success": 0, "current": 0}
 
 def add_web_log(msg, color="white"):
@@ -57,12 +126,8 @@ def add_web_log(msg, color="white"):
 # ══════════════════════════════════════════════════════════
 FB_REG_BASE = "https://limited.facebook.com"
 GRAPHQL_URL = "https://web.facebook.com/api/graphql/"
-CSV_FILE = "fb_accounts.csv"
-FAILED_CSV_FILE = "failed_accounts.csv"
 PROXY_FILE = "proxies.txt" 
 AUTH_FILE = "authorized_users.txt"
-
-file_lock = threading.Lock()
 
 def load_auth_users():
     if os.path.exists(AUTH_FILE):
@@ -87,7 +152,7 @@ def is_authorized(chat_id):
     return str(chat_id) in load_auth_users()
 
 # ══════════════════════════════════════════════════════════
-# HOTMAIL OTP AUTO-FETCHER (UPDATED FOR WEB)
+# HOTMAIL OTP AUTO-FETCHER
 # ══════════════════════════════════════════════════════════
 def fetch_otp_from_hotmail(email_addr, refresh_token, client_id, chat_id=None):
     global CANCEL_FLAG
@@ -125,19 +190,24 @@ def fetch_otp_from_hotmail(email_addr, refresh_token, client_id, chat_id=None):
                     if match:
                         code = match.group(1)
                         
-                        # Web e pathanor jonno save
+                        # Save to Supabase
+                        try:
+                            supabase.table("otps").insert({
+                                "email": email_addr,
+                                "code": code
+                            }).execute()
+                        except Exception as e:
+                            print(f"Supabase OTP Error: {e}")
+
+                        # Add to Web List
                         WEB_OTPS.append({"email": email_addr, "code": code})
                         add_web_log(f"OTP FOUND: {code} for {email_addr}", "green")
                         
-                        # Telegram e pathanor jonno
                         if chat_id: 
                             bot1.send_message(chat_id, f"📩 **OTP FOUND for `{email_addr}`**\n\n🔑 Code: `{code}`\n\n_Copied from Hotmail inbox!_", parse_mode='Markdown')
                         return 
         except Exception:
             pass
-    
-    if chat_id:
-        bot1.send_message(chat_id, f"⚠️ Could not find OTP for `{email_addr}` in Hotmail inbox (Timeout).", parse_mode='Markdown')
 
 # ══════════════════════════════════════════════════════════
 # DOMAIN TO LANGUAGE MAP
@@ -156,41 +226,6 @@ def get_lang_from_email(email_str):
     for tld, lang in DOMAIN_LANG_MAP.items():
         if domain.endswith(tld): return lang
     return None
-
-# ══════════════════════════════════════════════════════════
-# CSV SAVERS
-# ══════════════════════════════════════════════════════════
-def save_to_csv(uid, password, cookie, full_combo):
-    try:
-        with file_lock:
-            file_exists = os.path.isfile(CSV_FILE)
-            with open(CSV_FILE, mode='a', newline='', encoding='utf-8-sig') as f:
-                writer = csv.writer(f, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
-                if not file_exists or os.path.getsize(CSV_FILE) == 0:
-                    writer.writerow(['UID', 'PASSWORD', 'COOKIE', 'FULL_MAIL'])
-                writer.writerow([uid, password, cookie, full_combo])
-        return True
-    except Exception as e: return False
-
-def save_failed_to_csv(full_combo, reason):
-    try:
-        with file_lock:
-            file_exists = os.path.isfile(FAILED_CSV_FILE)
-            with open(FAILED_CSV_FILE, mode='a', newline='', encoding='utf-8-sig') as f:
-                writer = csv.writer(f, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
-                if not file_exists or os.path.getsize(FAILED_CSV_FILE) == 0:
-                    writer.writerow(['FULL_MAIL', 'REASON'])
-                writer.writerow([full_combo, reason])
-        return True
-    except Exception as e: return False
-
-def get_csv_stats():
-    success = 0; failed = 0
-    if os.path.exists(CSV_FILE):
-        with open(CSV_FILE, 'r', encoding='utf-8-sig') as f: success = sum(1 for line in f) - 1
-    if os.path.exists(FAILED_CSV_FILE):
-        with open(FAILED_CSV_FILE, 'r', encoding='utf-8-sig') as f: failed = sum(1 for line in f) - 1
-    return max(0, success), max(0, failed)
 
 # ══════════════════════════════════════════════════════════
 # PROXY & CORE LOGIC
@@ -236,7 +271,7 @@ PORTUGUESE_LAST_NAMES = ["Silva", "Santos", "Oliveira", "Souza", "Rodrigues", "F
 FRENCH_FIRST_NAMES = ["Jean", "Pierre", "Michel", "André", "Philippe", "Louis", "Nicolas", "François", "Alain", "Julien", "Bernard", "Marcel", "Daniel", "Paul", "Gérard", "Robert", "Patrick", "Henri", "Jacques", "Claude", "Éric", "Christian", "Georges", "René", "Pascal", "David", "Olivier", "Laurent", "Stéphane", "Thierry", "Thomas", "Sébastien", "Alexandre", "Vincent", "Christophe", "Maxime", "Jérôme", "Frédéric", "Xavier", "Fabrice", "Mathieu", "Antoine", "Romain", "Benjamin", "Guillaume", "Damien", "Yves", "Hugo", "Lucas", "Jules", "Léo", "Gabriel", "Raphaël", "Arthur", "Nathan", "Ethan", "Enzo", "Mathis", "Noah", "Tom"]
 FRENCH_LAST_NAMES = ["Martin", "Bernard", "Thomas", "Petit", "Robert", "Richard", "Durand", "Dubois", "Moreau", "Laurent", "Simon", "Michel", "Lefebvre", "Leroy", "Roux", "David", "Bertrand", "Morel", "Fournier", "Girard", "Bonnet", "Dupont", "Lambert", "Fontaine", "Rousseau", "Vincent", "Muller", "Lefevre", "Faure", "Andre", "Mercier", "Blanc", "Guerin", "Boyer", "Garnier", "Chevalier", "Francois", "Legrand", "Gauthier", "Garcia", "Perrin", "Robin", "Clement", "Morin", "Nicolas", "Henry", "Roussel", "Mathieu", "Gautier", "Masson", "Marchand", "Duval", "Denis", "Dumont", "Marie", "Lemaire", "Noel", "Meyer", "Dufour", "Meunier"]
 
-USER_AGENTS = [
+IOS_USER_AGENTS = [
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1",
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_1_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1",
     "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
@@ -244,12 +279,19 @@ USER_AGENTS = [
 ]
 SCREEN_PROFILES = [(390, 844, 3.0), (393, 852, 3.0), (428, 926, 3.0), (430, 932, 3.0), (375, 812, 3.0)]
 
-def build_fingerprint():
-    ua = random.choice(USER_AGENTS)
+def build_fingerprint(os_type="ios"):
+    if os_type == "android":
+        ua = random.choice(ANDROID_USER_AGENTS)
+        impersonate = "chrome120"
+    else:
+        ua = random.choice(IOS_USER_AGENTS)
+        impersonate = "safari15_5"
+
     sw, sh, dpr = random.choice(SCREEN_PROFILES)
     pringer_hash = hashlib.sha256(f"{ua}-{sw}x{sh}-{uuid.uuid4()}".encode()).hexdigest()[:32]
+    
     return {
-        "impersonate": "safari15_5", "pringer": pringer_hash,
+        "impersonate": impersonate, "pringer": pringer_hash,
         "headers": {
             "User-Agent": ua, "Accept-Language": CURRENT_LANG_HEADER,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -276,15 +318,15 @@ def warmup_session(session, fp, proxy):
         except: time.sleep(1)
     return collected, last_lsd
 
-def fb_create_account(email, password, lang_code, custom_fname, custom_lname, use_proxy):
+def fb_create_account(email, password, lang_code, custom_fname, custom_lname, use_proxy, os_type):
     session = cureq.Session()
     proxy = get_random_proxy() if use_proxy else None
     
-    fp = build_fingerprint()
+    fp = build_fingerprint(os_type)
     cookies_warm, lsd_token = warmup_session(session, fp, proxy)
     time.sleep(random.uniform(2.0, 4.0))
 
-    reg_fp = build_fingerprint()
+    reg_fp = build_fingerprint(os_type)
     try:
         r = session.get(f"{FB_REG_BASE}/reg/?cid=103", headers=reg_fp["headers"], impersonate=reg_fp["impersonate"], proxies=proxy, timeout=20)
         m = re.search(r'"LSD",\[\],\{"token":"([^"]+)"', r.text)
@@ -347,7 +389,7 @@ def resend_otp(session, uid, proxy):
         return (res.status_code == 200 and "errors" not in res.text)
     except Exception: return False
 
-def execute_batch(chat_id, email_data_list, password, lang, custom_name, use_proxy, is_web=False):
+def execute_batch(chat_id, email_data_list, password, lang, custom_name, use_proxy, os_type, is_web=False):
     global IS_RUNNING, WEB_STATE, CANCEL_FLAG
     IS_RUNNING = True
     CANCEL_FLAG = False
@@ -365,11 +407,22 @@ def execute_batch(chat_id, email_data_list, password, lang, custom_name, use_pro
         if not is_web and chat_id: status_msg = bot1.send_message(chat_id, f"⏳ [{idx}/{total}] Processing: `{email}`", parse_mode='Markdown')
         else: add_web_log(f"[{idx}/{total}] Processing: {email}", "cyan")
         
-        res, err = fb_create_account(email, password, lang, c_fname, c_lname, use_proxy)
+        res, err = fb_create_account(email, password, lang, c_fname, c_lname, use_proxy, os_type)
         
         if res:
             success_count += 1; WEB_STATE["success"] = success_count
-            csv_ok = save_to_csv(res['uid'], password, res['cookie'], full_combo)
+            
+            # Save to Supabase
+            try:
+                supabase.table("accounts").insert({
+                    "email": email,
+                    "password": password,
+                    "uid": res['uid'],
+                    "cookie": res['cookie'],
+                    "full_combo": full_combo
+                }).execute()
+            except Exception as e:
+                print(f"Supabase Save Error: {e}")
             
             msg_text = f"✅ **ACCOUNT CREATED!**\n\n📧 Email: `{email}`"
             
@@ -382,11 +435,19 @@ def execute_batch(chat_id, email_data_list, password, lang, custom_name, use_pro
             if len(combo_parts) >= 4:
                 refresh_token = combo_parts[2].strip()
                 client_id = combo_parts[3].strip()
-                # Start OTP fetch in background (web and bot)
                 threading.Thread(target=fetch_otp_from_hotmail, args=(email, refresh_token, client_id, chat_id if not is_web else None)).start()
         else:
             fail_count += 1
-            save_failed_to_csv(full_combo, err)
+            
+            # Save to Supabase
+            try:
+                supabase.table("failed_accounts").insert({
+                    "full_combo": full_combo,
+                    "reason": err
+                }).execute()
+            except Exception as e:
+                print(f"Supabase Error: {e}")
+
             fail_text = f"❌ `{email}` Failed: {err}"
             if not is_web and chat_id: bot1.edit_message_text(fail_text, chat_id=chat_id, message_id=status_msg.message_id, parse_mode='Markdown')
             else: add_web_log(fail_text, "red")
@@ -399,15 +460,15 @@ def execute_batch(chat_id, email_data_list, password, lang, custom_name, use_pro
     if CANCEL_FLAG:
         finish_msg = f"🛑 **Batch Cancelled!**\n\n✅ Total Success: {success_count}\n❌ Total Failed: {fail_count}"
     else:
-        finish_msg = f"🎉 **Batch Finished!**\n\n✅ Total Success: {success_count}\n❌ Total Failed: {fail_count}"
+        finish_msg = f"🎉 **Batch Finished!**\n\n✅ Total Success: {success_count}\n❌ Total Failed: {fail_count}\n\n👉 _Type /start to open menu again._"
     
     if not is_web and chat_id: 
-        bot1.send_message(chat_id, finish_msg + "\n\n👉 _Type /start to open menu._", parse_mode='Markdown', reply_markup=get_main_menu_1(chat_id))
+        bot1.send_message(chat_id, finish_msg, parse_mode='Markdown', reply_markup=get_main_menu_1(chat_id))
     else: 
         add_web_log(f"Finished! Success: {success_count}, Failed: {fail_count}", "yellow")
 
 # ══════════════════════════════════════════════════════════
-# MOBILE APP STYLE WEB DASHBOARD (WITH OTP COPY)
+# WEB DASHBOARD
 # ══════════════════════════════════════════════════════════
 LOGIN_TEMPLATE = """
 <!DOCTYPE html>
@@ -465,7 +526,6 @@ HTML_TEMPLATE = """
         .btn-row .btn.success { background: #10b981; }
         .btn-row .btn.failed { background: #ef4444; }
         
-        /* OTP Section */
         #otp-container { display: none; background: #064e3b; border: 1px solid #10b981; padding: 15px; border-radius: 12px; margin-bottom: 15px; }
         .otp-item { display: flex; justify-content: space-between; align-items: center; background: #0f172a; padding: 10px; border-radius: 8px; margin-bottom: 8px; border-left: 4px solid #10b981; }
         .otp-code { font-family: monospace; font-size: 18px; font-weight: bold; color: #4ade80; letter-spacing: 2px; }
@@ -485,13 +545,12 @@ HTML_TEMPLATE = """
 <body>
     <div class="header">
         <h1>🚀 Creator App</h1>
-        <span style="font-size:12px; color:#94a3b8;">v2.1</span>
+        <span style="font-size:12px; color:#94a3b8;">v2.3</span>
     </div>
     <div class="status-bar" id="status">Status: Idle</div>
 
     <div class="content" id="mainForm">
     
-        <!-- OTP DISPLAY SECTION -->
         <div id="otp-container">
             <label style="color:#4ade80; margin-bottom:10px;">📩 Recent OTPs</label>
             <div id="otp-list"></div>
@@ -500,6 +559,12 @@ HTML_TEMPLATE = """
         <div class="card">
             <label>Emails / Combos</label>
             <textarea id="emails" placeholder="email|password|refresh_token|client_id"></textarea>
+
+            <label>OS Mode</label>
+            <select id="osMode">
+                <option value="ios">iOS (Safari)</option>
+                <option value="android">Android (Chrome)</option>
+            </select>
 
             <label>Password Mode</label>
             <select id="passMode" onchange="togglePass()">
@@ -534,7 +599,7 @@ HTML_TEMPLATE = """
         </div>
 
         <div class="card">
-            <label>Downloads</label>
+            <label>Downloads (From Cloud)</label>
             <div class="btn-row">
                 <a href="/download/success" class="btn success" style="text-decoration:none; text-align:center;">📁 Success CSV</a>
                 <a href="/download/failed" class="btn failed" style="text-decoration:none; text-align:center;">❌ Failed CSV</a>
@@ -571,6 +636,7 @@ HTML_TEMPLATE = """
         const rawEmails = document.getElementById('emails').value.trim();
         if (!rawEmails) return alert("Please enter emails!");
         
+        const osMode = document.getElementById('osMode').value;
         const passMode = document.getElementById('passMode').value;
         const customPass = document.getElementById('customPass').value;
         const proxyMode = document.getElementById('proxyMode').value;
@@ -589,6 +655,7 @@ HTML_TEMPLATE = """
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({
                 emails: rawEmails.split('\\n').map(e => e.trim()).filter(e => e),
+                os_mode: osMode,
                 pass_mode: passMode,
                 custom_pass: customPass,
                 proxy_mode: proxyMode,
@@ -631,7 +698,6 @@ HTML_TEMPLATE = """
             logsDiv.scrollTop = logsDiv.scrollHeight;
         }
 
-        // Fetch OTPs
         const otpRes = await fetch('/api/otps');
         const otps = await otpRes.json();
         
@@ -714,12 +780,13 @@ def api_start():
         if len(parts) >= 2: custom_name = (parts[0], " ".join(parts[1:]))
         
     lang = data.get('lang', 'us')
+    os_mode = data.get('os_mode', 'ios')
     
     WEB_LOGS = [] 
-    WEB_OTPS = [] # Reset OTPs
+    WEB_OTPS = []
     CANCEL_FLAG = False
     add_web_log(f"Starting process for {len(email_data_list)} accounts...", "cyan")
-    threading.Thread(target=execute_batch, args=(None, email_data_list, password, lang, custom_name, use_proxy, True)).start()
+    threading.Thread(target=execute_batch, args=(None, email_data_list, password, lang, custom_name, use_proxy, os_mode, True)).start()
     return jsonify({"status": "started"})
 
 @app.route('/api/stop', methods=['POST'])
@@ -733,17 +800,49 @@ def api_stop():
 @app.route('/download/success')
 def download_success():
     if not session.get('logged_in'): return redirect(url_for('login'))
-    if os.path.exists(CSV_FILE): return send_file(CSV_FILE, as_attachment=True)
-    return "File not found", 404
+    
+    try:
+        response = supabase.table("accounts").select("uid, password, cookie, full_combo").execute()
+        data = response.data
+        if not data: return "No Data Found", 404
+        
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(['UID', 'PASSWORD', 'COOKIE', 'FULL_MAIL'])
+        for row in data:
+            writer.writerow([row.get('uid'), row.get('password'), row.get('cookie'), row.get('full_combo')])
+        
+        mem = io.BytesIO()
+        mem.write(output.getvalue().encode('utf-8-sig'))
+        mem.seek(0)
+        return send_file(mem, as_attachment=True, download_name="success_accounts.csv", mimetype='text/csv')
+    except Exception as e:
+        return f"Error: {e}", 500
 
 @app.route('/download/failed')
 def download_failed():
     if not session.get('logged_in'): return redirect(url_for('login'))
-    if os.path.exists(FAILED_CSV_FILE): return send_file(FAILED_CSV_FILE, as_attachment=True)
-    return "File not found", 404
+    
+    try:
+        response = supabase.table("failed_accounts").select("full_combo, reason").execute()
+        data = response.data
+        if not data: return "No Data Found", 404
+        
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(['FULL_MAIL', 'REASON'])
+        for row in data:
+            writer.writerow([row.get('full_combo'), row.get('reason')])
+        
+        mem = io.BytesIO()
+        mem.write(output.getvalue().encode('utf-8-sig'))
+        mem.seek(0)
+        return send_file(mem, as_attachment=True, download_name="failed_accounts.csv", mimetype='text/csv')
+    except Exception as e:
+        return f"Error: {e}", 500
 
 # ══════════════════════════════════════════════════════════
-# TELEGRAM BOT LOGIC (Same as before, keeping it intact)
+# BOT 1 LOGIC (MAIN BOT - CREATOR)
 # ══════════════════════════════════════════════════════════
 user_states = {}
 
@@ -793,14 +892,30 @@ def handle_inputs(message):
         state['email_data_list'] = email_data_list
         auto_lang = get_lang_from_email(email_data_list[0]['email'])
         state['auto_lang'] = auto_lang
-        state['step'] = 'password_mode'
+        state['step'] = 'os_mode'
+        
         msg = f"✅ Got {len(email_data_list)} emails."
         if auto_lang: msg += f"\n(Auto Language: {auto_lang.upper()})"
         
         markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
+        markup.add('iOS', 'Android')
+        markup.add('🔙 Cancel')
+        bot1.send_message(chat_id, msg + "\n📱 Select OS Mode:", reply_markup=markup)
+
+    elif state['step'] == 'os_mode':
+        text = message.text.lower()
+        if 'ios' in text: state['os_type'] = 'ios'
+        elif 'android' in text: state['os_type'] = 'android'
+        elif 'cancel' in text:
+            del user_states[chat_id]
+            return bot1.send_message(chat_id, "Cancelled.", reply_markup=get_main_menu_1(chat_id))
+        else: return bot1.send_message(chat_id, "❌ Select OS from buttons.")
+        
+        state['step'] = 'password_mode'
+        markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
         markup.add('Fix Password (SOHAVdd)', 'Custom Password')
         markup.add('🔙 Cancel')
-        bot1.send_message(chat_id, msg + "\n🔐 Select Password Mode:", reply_markup=markup)
+        bot1.send_message(chat_id, "🔐 Select Password Mode:", reply_markup=markup)
 
     elif state['step'] == 'password_mode':
         if 'Fix Password' in message.text:
@@ -829,6 +944,9 @@ def handle_inputs(message):
         elif 'Use Proxy' in choice:
             if len(load_proxies()) == 0: return bot1.send_message(chat_id, "⚠️ No proxies found!")
             state['use_proxy'] = True; next_step = True
+        elif 'Cancel' in choice:
+            del user_states[chat_id]
+            return bot1.send_message(chat_id, "Cancelled.", reply_markup=get_main_menu_1(chat_id))
         else: next_step = False; bot1.send_message(chat_id, "❌ Select from buttons.")
 
         if next_step:
@@ -842,6 +960,9 @@ def handle_inputs(message):
         if message.text == 'Custom Name':
             state['step'] = 'custom_name'
             bot1.send_message(chat_id, "✍️ Send: Firstname Lastname", reply_markup=ReplyKeyboardRemove())
+        elif 'Cancel' in message.text:
+            del user_states[chat_id]
+            return bot1.send_message(chat_id, "Cancelled.", reply_markup=get_main_menu_1(chat_id))
         else:
             state['custom_name'] = None
             if state.get('auto_lang'): state['lang'] = state['auto_lang']; start_batch_from_state(chat_id, state)
@@ -855,6 +976,9 @@ def handle_inputs(message):
         else: state['step'] = 'language'; show_languages(chat_id)
 
     elif state['step'] == 'language':
+        if 'Cancel' in message.text:
+            del user_states[chat_id]
+            return bot1.send_message(chat_id, "Cancelled.", reply_markup=get_main_menu_1(chat_id))
         state['lang'] = message.text.strip().lower()[:2]
         start_batch_from_state(chat_id, state)
 
@@ -881,15 +1005,18 @@ def start_batch_from_state(chat_id, state):
     
     state['step'] = None
     proxy_status = "Proxy ON" if state['use_proxy'] else "Direct IP"
-    bot1.send_message(chat_id, f"⚙️ Starting creation for {len(state['email_data_list'])} accounts ({proxy_status} | Lang: {lang.upper()})...\n\n👇 *Please wait...*", parse_mode='Markdown', reply_markup=ReplyKeyboardRemove())
-    threading.Thread(target=execute_batch, args=(chat_id, state['email_data_list'], state['password'], lang, state['custom_name'], state['use_proxy'], False)).start()
+    os_status = state['os_type'].upper()
+    
+    bot1.send_message(chat_id, f"⚙️ Starting for {len(state['email_data_list'])} accounts ({proxy_status} | Lang: {lang.upper()} | OS: {os_status})...\n\n👇 *Please wait...*", parse_mode='Markdown', reply_markup=ReplyKeyboardRemove())
+    threading.Thread(target=execute_batch, args=(chat_id, state['email_data_list'], state['password'], lang, state['custom_name'], state['use_proxy'], state['os_type'], False)).start()
 
 
 # ══════════════════════════════════════════════════════════
-# BOT 2 LOGIC (DOWNLOAD BOT - COOKIE)
+# BOT 2 LOGIC (DOWNLOAD BOT + OTP LIST)
 # ══════════════════════════════════════════════════════════
 def get_main_menu_2(chat_id):
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add(KeyboardButton('📩 OTP List'))
     markup.add(KeyboardButton('📁 Download Success'), KeyboardButton('❌ Download Failed'))
     if str(chat_id) == ADMIN_ID: markup.add(KeyboardButton('📊 Stats'))
     return markup
@@ -900,27 +1027,72 @@ def send_welcome_2(message):
     if not is_authorized(chat_id): return bot2.reply_to(message, "⛔ **Access Denied!**")
     bot2.reply_to(message, "Welcome to Download Bot! 📁", reply_markup=get_main_menu_2(chat_id))
 
+@bot2.message_handler(func=lambda message: message.text == '📩 OTP List')
+def show_otps(message):
+    chat_id = message.chat.id
+    if not is_authorized(chat_id): return
+    
+    try:
+        response = supabase.table("otps").select("email, code").order("id", desc=True).limit(20).execute()
+        data = response.data
+        if not data:
+            return bot2.send_message(chat_id, "❌ No OTPs found yet.")
+            
+        msg = "📩 **Recent OTPs:**\n\n"
+        for o in data:
+            msg += f"`{o['email']}` - `{o['code']}`\n"
+            
+        bot2.send_message(chat_id, msg, parse_mode='Markdown')
+    except Exception as e:
+        bot2.send_message(chat_id, f"Error: {e}")
+
 @bot2.message_handler(commands=['getcsv'])
 @bot2.message_handler(func=lambda message: message.text == '📁 Download Success')
 def send_csv_2(message):
     chat_id = message.chat.id
     if not is_authorized(chat_id): return
-    if os.path.exists(CSV_FILE):
-        try:
-            with open(CSV_FILE, 'rb') as f: bot2.send_document(chat_id, f, caption="Here is your SUCCESS CSV.")
-        except Exception as e: bot2.send_message(chat_id, f"Error: {e}")
-    else: bot2.send_message(chat_id, "❌ No Success CSV found.")
+    
+    try:
+        response = supabase.table("accounts").select("uid, password, cookie, full_combo").execute()
+        data = response.data
+        if not data: return bot2.send_message(chat_id, "❌ No Data.")
+        
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(['UID', 'PASSWORD', 'COOKIE', 'FULL_MAIL'])
+        for row in data:
+            writer.writerow([row.get('uid'), row.get('password'), row.get('cookie'), row.get('full_combo')])
+            
+        mem = io.BytesIO()
+        mem.write(output.getvalue().encode('utf-8-sig'))
+        mem.seek(0)
+        bot2.send_document(chat_id, mem, visible_file_name="success.csv", caption="Here is your SUCCESS CSV.")
+    except Exception as e:
+        bot2.send_message(chat_id, f"Error: {e}")
 
 @bot2.message_handler(commands=['getfailed'])
 @bot2.message_handler(func=lambda message: message.text == '❌ Download Failed')
 def send_failed_csv_2(message):
     chat_id = message.chat.id
     if not is_authorized(chat_id): return
-    if os.path.exists(FAILED_CSV_FILE):
-        try:
-            with open(FAILED_CSV_FILE, 'rb') as f: bot2.send_document(chat_id, f, caption="Here is your FAILED CSV.")
-        except Exception as e: bot2.send_message(chat_id, f"Error: {e}")
-    else: bot2.send_message(chat_id, "❌ No Failed CSV found.")
+    
+    try:
+        response = supabase.table("failed_accounts").select("full_combo, reason").execute()
+        data = response.data
+        if not data: return bot2.send_message(chat_id, "❌ No Data.")
+        
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(['FULL_MAIL', 'REASON'])
+        for row in data:
+            writer.writerow([row.get('full_combo'), row.get('reason')])
+            
+        mem = io.BytesIO()
+        mem.write(output.getvalue().encode('utf-8-sig'))
+        mem.seek(0)
+        bot2.send_document(chat_id, mem, visible_file_name="failed.csv", caption="Here is your FAILED CSV.")
+    except Exception as e:
+        bot2.send_message(chat_id, f"Error: {e}")
 
 
 # ══════════════════════════════════════════════════════════
@@ -935,5 +1107,5 @@ if __name__ == '__main__':
     t2.daemon = True
     t2.start()
 
-    print("App Server & Bots running...")
+    print("App Server & Bots running with Supabase...")
     bot1.infinity_polling()
