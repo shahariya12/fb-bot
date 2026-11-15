@@ -1,7 +1,7 @@
 #-----create by siam ---#
 #------TG: @SIAMKHANXD--#
 import telebot
-from telebot.types import ReplyKeyboardMarkup, KeyboardButton
+from telebot.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 import json
 import re
 import uuid
@@ -26,8 +26,8 @@ except ImportError:
 # SETTINGS (Ekhane tomar details boshao)
 # ══════════════════════════════════════════════════════════
 BOT_TOKEN = "9025360567:AAEJ2Jq2FSAVpDOVC3UCPYViQE9-sNI7NSk" 
-ADMIN_ID = "6408202140" # <--- Tomar Telegram ID ekhane boshao
-WEB_PASSWORD = "SOHAV"
+ADMIN_ID = "1234567890" # <--- Tomar Telegram ID ekhane boshao
+WEB_PASSWORD = "SOHAV_ADMIN"
 bot = telebot.TeleBot(BOT_TOKEN)
 
 # Auth File for Resellers
@@ -170,7 +170,7 @@ LANG_MAP = {
 }
 CURRENT_LANG_HEADER = "en-US,en;q=0.9"
 
-# NAME LISTS (Same as before)
+# NAME LISTS
 DEFAULT_FIRST_NAMES = ['Arafat', 'Rakib', 'Sabbir', 'Nayeem', 'Rifat', 'Tanvir', 'Shakib', 'Sajid', 'John', 'David', 'Michael', 'James']
 DEFAULT_LAST_NAMES = ['Hossain', 'Ahmed', 'Khan', 'Islam', 'Rahman', 'Sarker', 'Smith', 'Johnson', 'Williams', 'Brown']
 GERMAN_FIRST_NAMES = ["Alexander", "Andreas", "Anna", "Anja", "Anke", "Anton", "Armin", "Axel", "Barbara", "Bastian", "Benedikt", "Benjamin", "Bernd", "Birgit", "Björn", "Brigitte", "Bruno", "Carina", "Carla", "Charlotte", "Christian", "Christina", "Christof", "Claudia", "Claus", "Cornelia", "Daniel", "Daniela", "David", "Dennis"]
@@ -330,16 +330,162 @@ def execute_batch(chat_id, email_data_list, password, lang, custom_name, use_pro
         for future in futures: future.result()
 
     IS_RUNNING = False
-    finish_msg = f"🎉 **Batch Finished!**\n\n✅ Total Success: {success_count}\n❌ Total Failed: {fail_count}"
+    finish_msg = f"🎉 **Batch Finished!**\n\n✅ Total Success: {success_count}\n❌ Total Failed: {fail_count}\n\n👉 _Type /start to open menu again._"
     
-    if not is_web and chat_id: bot.send_message(chat_id, finish_msg + "\n\n📁 Tap 'Download' buttons to get your CSV files.", parse_mode='Markdown', reply_markup=get_main_menu(chat_id))
-    else: add_web_log(f"Finished! Success: {success_count}, Failed: {fail_count}", "yellow")
+    # Keyboard Remove & Only Show Result
+    if not is_web and chat_id: 
+        bot.send_message(chat_id, finish_msg, parse_mode='Markdown', reply_markup=ReplyKeyboardRemove())
+    else: 
+        add_web_log(f"Finished! Success: {success_count}, Failed: {fail_count}", "yellow")
 
 # ══════════════════════════════════════════════════════════
 # WEB DASHBOARD
 # ══════════════════════════════════════════════════════════
-LOGIN_TEMPLATE = """...""" # Same as before
-HTML_TEMPLATE = """...""" # Same as before
+LOGIN_TEMPLATE = """
+<!DOCTYPE html><html><body style="background:#0f172a; color:white; text-align:center; padding-top:100px; font-family:sans-serif;">
+<h2>🔒 Admin Login</h2>
+<form method="POST">
+    <input type="password" name="password" placeholder="Enter Password" style="padding:10px; border-radius:5px; border:none;"><br><br>
+    <button type="submit" style="padding:10px 20px; background:#0ea5e9; border:none; color:white; border-radius:5px; font-weight:bold;">LOGIN</button>
+</form>
+{% if error %}<p style="color:red;">{{ error }}</p>{% endif %}
+</body></html>
+"""
+
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>FB Auto Creator Admin</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0f172a; color: #e2e8f0; padding: 20px; margin: 0; }
+        .container { max-width: 800px; margin: auto; background: #1e293b; padding: 20px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.5); }
+        h2 { color: #38bdf8; text-align: center; }
+        label { font-size: 14px; color: #94a3b8; margin-bottom: 5px; display: block; }
+        textarea, input, select { width: 100%; padding: 10px; margin-bottom: 15px; background: #0f172a; color: #e2e8f0; border: 1px solid #334155; border-radius: 6px; box-sizing: border-box; }
+        .btn { width: 100%; padding: 12px; background: #0ea5e9; color: white; border: none; border-radius: 6px; font-weight: bold; cursor: pointer; font-size: 16px; }
+        .btn:hover { background: #0284c7; }
+        .btn:disabled { background: #475569; cursor: not-allowed; }
+        .btn-row { display: flex; gap: 10px; margin-bottom: 15px; }
+        .btn-row a { flex: 1; text-align: center; padding: 10px; background: #10b981; color: white; text-decoration: none; border-radius: 6px; font-weight: bold; }
+        .btn-row a.fail { background: #ef4444; }
+        #logs { background: #0f172a; height: 300px; overflow-y: auto; padding: 10px; border-radius: 6px; font-family: monospace; font-size: 13px; border: 1px solid #334155; }
+        .log-line { margin-bottom: 4px; }
+        .cyan { color: #22d3ee; } .green { color: #4ade80; } .red { color: #f87171; } .yellow { color: #fbbf24; } .white { color: #e2e8f0; }
+        .status-bar { background: #334155; padding: 10px; border-radius: 6px; margin-bottom: 15px; font-weight: bold; text-align: center; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h2>🚀 Admin Dashboard</h2>
+    <div class="status-bar" id="status">Status: Idle</div>
+
+    <label>Emails / Combos (One per line)</label>
+    <textarea id="emails" rows="4" placeholder="email|password|refresh_token|client_id&#10;email2@domain.com"></textarea>
+
+    <label>Password Mode</label>
+    <select id="passMode" onchange="togglePass()">
+        <option value="fix">Fix Password (SOHAVdd)</option>
+        <option value="custom">Custom Password</option>
+    </select>
+    <input type="text" id="customPass" placeholder="Enter Custom Password" style="display:none;">
+
+    <label>Proxy Mode</label>
+    <select id="proxyMode">
+        <option value="no">No Proxy (Direct)</option>
+        <option value="yes">Use Proxy (Auto from file)</option>
+    </select>
+
+    <label>Name Mode</label>
+    <select id="nameMode" onchange="toggleName()">
+        <option value="auto">Auto Name</option>
+        <option value="custom">Custom Name</option>
+    </select>
+    <input type="text" id="customName" placeholder="Firstname Lastname" style="display:none;">
+
+    <label>Language</label>
+    <select id="lang">
+        <option value="de">German (DE)</option>
+        <option value="fr">French (FR)</option>
+        <option value="br">Portuguese (BR)</option>
+        <option value="us">English (US)</option>
+    </select>
+
+    <button class="btn" id="startBtn" onclick="startBatch()">START PROCESS</button>
+
+    <div class="btn-row" style="margin-top: 15px;">
+        <a href="/download/success">Download Success CSV</a>
+        <a href="/download/failed" class="fail">Download Failed CSV</a>
+    </div>
+
+    <label style="margin-top: 15px;">Live Logs</label>
+    <div id="logs"></div>
+</div>
+
+<script>
+    function togglePass() {
+        document.getElementById('customPass').style.display = document.getElementById('passMode').value === 'custom' ? 'block' : 'none';
+    }
+    function toggleName() {
+        document.getElementById('customName').style.display = document.getElementById('nameMode').value === 'custom' ? 'block' : 'none';
+    }
+
+    async function startBatch() {
+        const rawEmails = document.getElementById('emails').value.trim();
+        if (!rawEmails) return alert("Please enter emails!");
+        
+        const passMode = document.getElementById('passMode').value;
+        const customPass = document.getElementById('customPass').value;
+        const proxyMode = document.getElementById('proxyMode').value;
+        const nameMode = document.getElementById('nameMode').value;
+        const customName = document.getElementById('customName').value;
+        const lang = document.getElementById('lang').value;
+
+        document.getElementById('startBtn').disabled = true;
+        document.getElementById('logs').innerHTML = '';
+
+        const res = await fetch('/api/start', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                emails: rawEmails.split('\\n').map(e => e.trim()).filter(e => e),
+                pass_mode: passMode,
+                custom_pass: customPass,
+                proxy_mode: proxyMode,
+                name_mode: nameMode,
+                custom_name: customName,
+                lang: lang
+            })
+        });
+        
+        if (!res.ok) {
+            alert("Error starting batch");
+            document.getElementById('startBtn').disabled = false;
+        }
+    }
+
+    setInterval(async () => {
+        const res = await fetch('/api/status');
+        const data = await res.json();
+        
+        if (data.is_running) {
+            document.getElementById('status').innerText = `Status: Running (${data.success}/${data.total})`;
+        } else {
+            document.getElementById('status').innerText = "Status: Idle";
+            document.getElementById('startBtn').disabled = false;
+        }
+
+        const logsDiv = document.getElementById('logs');
+        if (data.logs.length > 0) {
+            logsDiv.innerHTML = data.logs.map(l => `<div class="log-line ${l.color}">[${l.time}] ${l.msg}</div>`).join('');
+            logsDiv.scrollTop = logsDiv.scrollHeight;
+        }
+    }, 2000);
+</script>
+</body>
+</html>
+"""
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -409,7 +555,7 @@ def download_failed():
     return "File not found", 404
 
 # ══════════════════════════════════════════════════════════
-# TELEGRAM BOT LOGIC (WITH AUTH CHECK & ADMIN PANEL)
+# TELEGRAM BOT LOGIC
 # ══════════════════════════════════════════════════════════
 user_states = {}
 
@@ -426,7 +572,9 @@ def send_welcome(message):
     chat_id = message.chat.id
     if not is_authorized(chat_id):
         return bot.reply_to(message, "⛔ **Access Denied!**\n\nYou are not authorized to use this bot. Please contact the admin to get access.")
-    bot.reply_to(message, "Welcome to FB Auto Creator Bot! 🤖\n\nBot ready. Click below to start.", reply_markup=get_main_menu(chat_id))
+    
+    # Show User ID on start
+    bot.reply_to(message, f"Welcome to FB Auto Creator Bot! 🤖\n\n🆔 **Your Telegram ID:** `{chat_id}`\n\nBot ready. Click below to start.", reply_markup=get_main_menu(chat_id), parse_mode='Markdown')
 
 @bot.message_handler(commands=['adduser'])
 def add_user(message):
@@ -475,15 +623,15 @@ def admin_actions(message):
     
     if message.text == '📊 Stats':
         success, failed = get_csv_stats()
-        bot.send_message(chat_id, f"📊 **Bot Statistics**\n\n✅ Total Success: {success}\n❌ Total Failed: {failed}")
+        bot.send_message(chat_id, f"📊 **Bot Statistics**\n\n✅ Total Success: {success}\n❌ Total Failed: {failed}", reply_markup=ReplyKeyboardRemove())
     elif message.text == '🔌 Proxy Count':
-        bot.send_message(chat_id, f"🔌 Loaded Proxies: {len(load_proxies())}")
+        bot.send_message(chat_id, f"🔌 Loaded Proxies: {len(load_proxies())}", reply_markup=ReplyKeyboardRemove())
     elif message.text == '🗑 Clear Success CSV':
         if os.path.exists(CSV_FILE): os.remove(CSV_FILE)
-        bot.send_message(chat_id, "✅ Success CSV Cleared!")
+        bot.send_message(chat_id, "✅ Success CSV Cleared!", reply_markup=ReplyKeyboardRemove())
     elif message.text == '🗑 Clear Failed CSV':
         if os.path.exists(FAILED_CSV_FILE): os.remove(FAILED_CSV_FILE)
-        bot.send_message(chat_id, "✅ Failed CSV Cleared!")
+        bot.send_message(chat_id, "✅ Failed CSV Cleared!", reply_markup=ReplyKeyboardRemove())
     elif message.text == '🔙 Back to Menu':
         bot.send_message(chat_id, "Back to main menu.", reply_markup=get_main_menu(chat_id))
 
@@ -516,7 +664,7 @@ def start_creation(message):
     if not is_authorized(chat_id): return
     if IS_RUNNING: return bot.send_message(chat_id, "⚠️ A process is already running! Please wait.")
     user_states[chat_id] = {'step': 'emails'}
-    bot.send_message(chat_id, "📧 Paste your emails or combos (one per line):", reply_markup=telebot.types.ReplyKeyboardRemove())
+    bot.send_message(chat_id, "📧 Paste your emails or combos (one per line):", reply_markup=ReplyKeyboardRemove())
 
 @bot.message_handler(func=lambda message: True)
 def handle_inputs(message):
@@ -548,17 +696,17 @@ def handle_inputs(message):
             tz = datetime.timezone(datetime.timedelta(hours=6))
             state['password'] = f"SOHAV{datetime.datetime.now(tz).day}"
             state['step'] = 'proxy_mode'
-            bot.send_message(chat_id, f"✅ Fixed Password set to: `{state['password']}`", parse_mode='Markdown')
+            bot.send_message(chat_id, f"✅ Fixed Password set to: `{state['password']}`", parse_mode='Markdown', reply_markup=ReplyKeyboardRemove())
             show_proxy_menu(chat_id)
         elif 'Custom Password' in message.text:
             state['step'] = 'custom_password'
-            bot.send_message(chat_id, "✍️ Enter your Custom Password:", reply_markup=telebot.types.ReplyKeyboardRemove())
+            bot.send_message(chat_id, "✍️ Enter your Custom Password:", reply_markup=ReplyKeyboardRemove())
         else: bot.send_message(chat_id, "❌ Please select from the buttons.")
 
     elif state['step'] == 'custom_password':
         state['password'] = message.text.strip()
         state['step'] = 'proxy_mode'
-        bot.send_message(chat_id, f"✅ Custom Password set.")
+        bot.send_message(chat_id, f"✅ Custom Password set.", reply_markup=ReplyKeyboardRemove())
         show_proxy_menu(chat_id)
 
     elif state['step'] == 'proxy_mode':
@@ -578,7 +726,7 @@ def handle_inputs(message):
     elif state['step'] == 'name_mode':
         if message.text == 'Custom Name':
             state['step'] = 'custom_name'
-            bot.send_message(chat_id, "✍️ Send: Firstname Lastname", reply_markup=telebot.types.ReplyKeyboardRemove())
+            bot.send_message(chat_id, "✍️ Send: Firstname Lastname", reply_markup=ReplyKeyboardRemove())
         else:
             state['custom_name'] = None
             if state.get('auto_lang'): state['lang'] = state['auto_lang']; start_batch_from_state(chat_id, state)
@@ -616,7 +764,7 @@ def start_batch_from_state(chat_id, state):
     
     state['step'] = None
     proxy_status = "Proxy ON" if state['use_proxy'] else "Direct IP"
-    bot.send_message(chat_id, f"⚙️ Starting creation for {len(state['email_data_list'])} accounts ({proxy_status} | Lang: {lang.upper()})...", reply_markup=get_main_menu(chat_id))
+    bot.send_message(chat_id, f"⚙️ Starting creation for {len(state['email_data_list'])} accounts ({proxy_status} | Lang: {lang.upper()})...\n\n👇 *Please wait, results will appear below.*", parse_mode='Markdown', reply_markup=ReplyKeyboardRemove())
     threading.Thread(target=execute_batch, args=(chat_id, state['email_data_list'], state['password'], lang, state['custom_name'], state['use_proxy'], False)).start()
 
 # ══════════════════════════════════════════════════════════
