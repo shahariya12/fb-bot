@@ -31,10 +31,10 @@ except ImportError:
 BOT_TOKEN_1 = "9025360567:AAEJ2Jq2FSAVpDOVC3UCPYViQE9-sNI7NSk"
 BOT_TOKEN_2 = "9028640496:AAG8y-z28g98sjYfEjLC5yanhhA-YgP9zHQ"
 ADMIN_ID = "6408202140"
-WEB_PASSWORD = "SOHAV_ADMIN"
+WEB_PASSWORD = "SOHAV"
 
 SUPABASE_URL = "https://plojfqqvqnddxibaxrqr.supabase.co/rest/v1/" # <-- Tomar Project URL
-SUPABASE_KEY = "your-anon-key" # <-- Tomar anon key
+SUPABASE_KEY = "sb_publishable_TkViojZqhR4ViRLfwEZpqg_TgKTE3Ps" # <-- Tomar anon key
 
 try:
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
