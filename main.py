@@ -26,7 +26,7 @@ except ImportError:
 # SETTINGS (Ekhane tomar details boshao)
 # ══════════════════════════════════════════════════════════
 BOT_TOKEN = "9025360567:AAEJ2Jq2FSAVpDOVC3UCPYViQE9-sNI7NSk" 
-ADMIN_ID = "1234567890" # <--- Tomar Telegram ID ekhane boshao
+ADMIN_ID = "6408202140" # <--- Tomar Telegram ID ekhane boshao
 WEB_PASSWORD = "SOHAV_ADMIN"
 bot = telebot.TeleBot(BOT_TOKEN)
 
