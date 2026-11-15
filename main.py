@@ -1,7 +1,7 @@
 #-----create by siam ---#
 #------TG: @SIAMKHANXD--#
 import telebot
-from telebot.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from telebot.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton
 import json
 import re
 import uuid
@@ -24,7 +24,7 @@ except ImportError:
     exit()
 
 # ══════════════════════════════════════════════════════════
-# BOT SETTINGS (Ekhane 2 ta token boshao)
+# BOT SETTINGS
 # ══════════════════════════════════════════════════════════
 BOT_TOKEN_1 = "9025360567:AAEJ2Jq2FSAVpDOVC3UCPYViQE9-sNI7NSk" # Main Bot (Creator)
 BOT_TOKEN_2 = "9028640496:AAG8y-z28g98sjYfEjLC5yanhhA-YgP9zHQ" # Download Bot (Cookie)
@@ -85,12 +85,13 @@ def is_authorized(chat_id):
     return str(chat_id) in load_auth_users()
 
 # ══════════════════════════════════════════════════════════
-# HOTMAIL OTP AUTO-FETCHER (Silent Mode)
+# HOTMAIL OTP AUTO-FETCHER (Silent Mode + Refresh Button)
 # ══════════════════════════════════════════════════════════
-def fetch_otp_from_hotmail(email_addr, refresh_token, client_id, chat_id):
-    # Ekhane ager moto "Auto-checking" message ta nei, tai silent e kaj korbe
-    
-    for attempt in range(2400): 
+def fetch_otp_from_hotmail(email_addr, refresh_token, client_id, chat_id, is_refresh=False):
+    if is_refresh:
+        bot1.send_message(chat_id, f"🔄 _Refreshing inbox for new code..._", parse_mode='Markdown')
+
+    for attempt in range(60): # 60 * 3s = 3 mins limit per check
         time.sleep(3)
         try:
             token_res = requests.post("https://login.microsoftonline.com/common/oauth2/v2.0/token", data={
@@ -104,30 +105,64 @@ def fetch_otp_from_hotmail(email_addr, refresh_token, client_id, chat_id):
             if not access_token: continue
 
             msg_res = requests.get(
-                "https://graph.microsoft.com/v1.0/me/messages?$top=10&$orderby=receivedDateTime%20desc&$select=subject,body,receivedDateTime,from",
+                "https://graph.microsoft.com/v1.0/me/messages?$top=3&$orderby=receivedDateTime%20desc&$select=subject,body,receivedDateTime,from",
                 headers={"Authorization": f"Bearer {access_token}"},
                 timeout=10
             )
             
             messages = msg_res.json().get("value", [])
-            for msg in messages:
-                body = msg.get("body", {}).get("content", "")
-                subject = msg.get("subject", "")
-                sender = msg.get("from", {}).get("emailAddress", {}).get("address", "")
-                
-                if "facebook" in sender.lower() or "facebook" in subject.lower() or "code" in subject.lower():
-                    clean_body = re.sub(r'<[^>]+>', ' ', body)
-                    match = re.search(r'\b(\d{5})\b', clean_body)
-                    if not match: match = re.search(r'\b(\d{6})\b', clean_body)
+            if not messages: continue
+            
+            # Shudhu matro sobar notun mail ta check korbe
+            latest_msg = messages[0]
+            body = latest_msg.get("body", {}).get("content", "")
+            subject = latest_msg.get("subject", "")
+            sender = latest_msg.get("from", {}).get("emailAddress", {}).get("address", "")
+            
+            if "facebook" in sender.lower() or "facebook" in subject.lower() or "code" in subject.lower():
+                clean_body = re.sub(r'<[^>]+>', ' ', body)
+                match = re.search(r'\b(\d{5})\b', clean_body)
+                if not match: match = re.search(r'\b(\d{6})\b', clean_body)
 
-                    if match:
-                        code = match.group(1)
-                        bot1.send_message(chat_id, f"📩 **OTP FOUND for `{email_addr}`**\n\n🔑 Code: `{code}`\n\n_Copied from Hotmail inbox!_", parse_mode='Markdown')
-                        return 
+                if match:
+                    code = match.group(1)
+                    
+                    # Refresh Button Add
+                    markup = InlineKeyboardMarkup()
+                    btn = InlineKeyboardButton("🔄 Refresh Code", callback_data=f"refresh_otp|{email_addr}|{refresh_token}|{client_id}")
+                    markup.add(btn)
+                    
+                    bot1.send_message(
+                        chat_id, 
+                        f"📩 **OTP FOUND for `{email_addr}`**\n\n🔑 Code: `{code}`\n\n_Copied from Hotmail inbox!_", 
+                        parse_mode='Markdown',
+                        reply_markup=markup
+                    )
+                    return 
         except Exception:
             pass
     
-    bot1.send_message(chat_id, f"⚠️ Could not find OTP for `{email_addr}` in Hotmail inbox (Timeout).", parse_mode='Markdown')
+    if not is_refresh:
+        bot1.send_message(chat_id, f"⚠️ Could not find OTP for `{email_addr}` in Hotmail inbox.", parse_mode='Markdown')
+
+@bot1.callback_query_handler(func=lambda call: call.data.startswith('refresh_otp'))
+def handle_refresh_otp(call):
+    try:
+        _, email, r_token, c_id = call.data.split('|')
+        bot1.answer_callback_query(call.id, "Checking for new code...")
+        
+        # Edit the old message to indicate refreshing
+        bot1.edit_message_text(
+            f"🔄 Refreshing code for `{email}`...",
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            parse_mode='Markdown'
+        )
+        
+        # Call fetch again in background
+        threading.Thread(target=fetch_otp_from_hotmail, args=(email, r_token, c_id, call.message.chat.id, True)).start()
+    except Exception as e:
+        bot1.answer_callback_query(call.id, "Error refreshing!")
 
 # ══════════════════════════════════════════════════════════
 # DOMAIN TO LANGUAGE MAP
@@ -360,7 +395,6 @@ def execute_batch(chat_id, email_data_list, password, lang, custom_name, use_pro
             csv_ok = save_to_csv(res['uid'], password, res['cookie'], full_combo)
             csv_status = "✅ Saved to CSV" if csv_ok else "⚠️ CSV Save Failed"
             
-            # SUDHU EMAIL SHOW KORBE
             msg_text = f"✅ **ACCOUNT CREATED!**\n\n📧 Email: `{email}`"
             
             if not is_web and chat_id: bot1.edit_message_text(msg_text, chat_id=chat_id, message_id=status_msg.message_id, parse_mode='Markdown')
@@ -373,7 +407,7 @@ def execute_batch(chat_id, email_data_list, password, lang, custom_name, use_pro
                 refresh_token = combo_parts[2].strip()
                 client_id = combo_parts[3].strip()
                 if not is_web and chat_id:
-                    threading.Thread(target=fetch_otp_from_hotmail, args=(email, refresh_token, client_id, chat_id)).start()
+                    threading.Thread(target=fetch_otp_from_hotmail, args=(email, refresh_token, client_id, chat_id, False)).start()
         else:
             fail_count += 1
             save_failed_to_csv(full_combo, err)
@@ -394,7 +428,7 @@ def execute_batch(chat_id, email_data_list, password, lang, custom_name, use_pro
         add_web_log(f"Finished! Success: {success_count}, Failed: {fail_count}", "yellow")
 
 # ══════════════════════════════════════════════════════════
-# WEB DASHBOARD
+# WEB DASHBOARD (Same as before)
 # ══════════════════════════════════════════════════════════
 LOGIN_TEMPLATE = """
 <!DOCTYPE html><html><body style="background:#0f172a; color:white; text-align:center; padding-top:100px; font-family:sans-serif;">
