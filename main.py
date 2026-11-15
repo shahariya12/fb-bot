@@ -85,12 +85,11 @@ def is_authorized(chat_id):
     return str(chat_id) in load_auth_users()
 
 # ══════════════════════════════════════════════════════════
-# HOTMAIL OTP AUTO-FETCHER (3s Refresh - 2 Hours)
+# HOTMAIL OTP AUTO-FETCHER (Silent Mode)
 # ══════════════════════════════════════════════════════════
 def fetch_otp_from_hotmail(email_addr, refresh_token, client_id, chat_id):
-    bot1.send_message(chat_id, f"🔄 _Auto-checking Hotmail for `{email_addr}` (Every 3s for 2 Hours)..._", parse_mode='Markdown')
+    # Ekhane ager moto "Auto-checking" message ta nei, tai silent e kaj korbe
     
-    # 2 hours = 7200 seconds. 7200 / 3 = 2400 attempts
     for attempt in range(2400): 
         time.sleep(3)
         try:
@@ -117,25 +116,18 @@ def fetch_otp_from_hotmail(email_addr, refresh_token, client_id, chat_id):
                 sender = msg.get("from", {}).get("emailAddress", {}).get("address", "")
                 
                 if "facebook" in sender.lower() or "facebook" in subject.lower() or "code" in subject.lower():
-                    # HTML tags remove kora hocche jate random 6 digit number na dhore
                     clean_body = re.sub(r'<[^>]+>', ' ', body)
-                    
-                    # Prothome 5 digit khujbe (Tomar kotha onujayi)
                     match = re.search(r'\b(\d{5})\b', clean_body)
-                    
-                    # Jodi 5 digit na pay, tobe 6 digit khujbe
-                    if not match:
-                        match = re.search(r'\b(\d{6})\b', clean_body)
+                    if not match: match = re.search(r'\b(\d{6})\b', clean_body)
 
                     if match:
                         code = match.group(1)
                         bot1.send_message(chat_id, f"📩 **OTP FOUND for `{email_addr}`**\n\n🔑 Code: `{code}`\n\n_Copied from Hotmail inbox!_", parse_mode='Markdown')
-                        return # Stop after finding
+                        return 
         except Exception:
             pass
     
-    # If not found after 2 Hours
-    bot1.send_message(chat_id, f"⚠️ Could not find OTP for `{email_addr}` in Hotmail inbox (Timeout 2 Hours).", parse_mode='Markdown')
+    bot1.send_message(chat_id, f"⚠️ Could not find OTP for `{email_addr}` in Hotmail inbox (Timeout).", parse_mode='Markdown')
 
 # ══════════════════════════════════════════════════════════
 # DOMAIN TO LANGUAGE MAP
@@ -368,10 +360,11 @@ def execute_batch(chat_id, email_data_list, password, lang, custom_name, use_pro
             csv_ok = save_to_csv(res['uid'], password, res['cookie'], full_combo)
             csv_status = "✅ Saved to CSV" if csv_ok else "⚠️ CSV Save Failed"
             
-            msg_text = f"✅ **ACCOUNT CREATED!**\n\n📧 Email: `{email}`\n👤 Name: `{res['firstname']} {res['lastname']}`\n🆔 UID: `{res['uid']}`\n🔑 Password: `{password}`\n\n{csv_status}"
+            # SUDHU EMAIL SHOW KORBE
+            msg_text = f"✅ **ACCOUNT CREATED!**\n\n📧 Email: `{email}`"
             
             if not is_web and chat_id: bot1.edit_message_text(msg_text, chat_id=chat_id, message_id=status_msg.message_id, parse_mode='Markdown')
-            else: add_web_log(f"[+] SUCCESS: {email} | UID: {res['uid']}", "green")
+            else: add_web_log(f"[+] SUCCESS: {email}", "green")
             
             resend_otp(res['session'], res['uid'], res['proxy'])
             
@@ -401,7 +394,7 @@ def execute_batch(chat_id, email_data_list, password, lang, custom_name, use_pro
         add_web_log(f"Finished! Success: {success_count}, Failed: {fail_count}", "yellow")
 
 # ══════════════════════════════════════════════════════════
-# WEB DASHBOARD (No change needed here, keeping it same)
+# WEB DASHBOARD
 # ══════════════════════════════════════════════════════════
 LOGIN_TEMPLATE = """
 <!DOCTYPE html><html><body style="background:#0f172a; color:white; text-align:center; padding-top:100px; font-family:sans-serif;">
