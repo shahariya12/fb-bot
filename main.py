@@ -40,7 +40,7 @@ def add_web_log(msg, color="white"):
     global WEB_LOGS
     t = datetime.datetime.now().strftime("%H:%M:%S")
     WEB_LOGS.append({"time": t, "msg": msg, "color": color})
-    if len(WEB_LOGS) > 100: WEB_LOGS.pop(0) # Keep last 100 logs
+    if len(WEB_LOGS) > 100: WEB_LOGS.pop(0)
 
 # ══════════════════════════════════════════════════════════
 # CONSTANTS & FILES
@@ -63,37 +63,39 @@ DOMAIN_LANG_MAP = {
     '.au': 'au', '.nl': 'nl', '.pl': 'pl', '.se': 'se', '.vn': 'vn', '.th': 'th'
 }
 
-def get_lang_from_email(email):
-    domain = email.split('@')[-1].lower()
+def get_lang_from_email(email_str):
+    # Extract actual email if combo is provided
+    email = email_str.split('|')[0].strip()
+    domain = email.split('@')[-1].lower() if '@' in email else ""
     if domain.endswith('.com'): return None 
     for tld, lang in DOMAIN_LANG_MAP.items():
         if domain.endswith(tld): return lang
     return None
 
 # ══════════════════════════════════════════════════════════
-# CSV SAVERS
+# CSV SAVERS (Updated to save full combo)
 # ══════════════════════════════════════════════════════════
-def save_to_csv(uid, cookie, email):
+def save_to_csv(uid, cookie, full_combo):
     try:
         with file_lock:
             file_exists = os.path.isfile(CSV_FILE)
             with open(CSV_FILE, mode='a', newline='', encoding='utf-8-sig') as f:
                 writer = csv.writer(f, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
                 if not file_exists or os.path.getsize(CSV_FILE) == 0:
-                    writer.writerow(['UID', 'COOKIE', 'MAIL'])
-                writer.writerow([uid, cookie, email])
+                    writer.writerow(['UID', 'COOKIE', 'MAIL_COMBO'])
+                writer.writerow([uid, cookie, full_combo])
         return True
     except Exception as e: return False
 
-def save_failed_to_csv(email, reason):
+def save_failed_to_csv(full_combo, reason):
     try:
         with file_lock:
             file_exists = os.path.isfile(FAILED_CSV_FILE)
             with open(FAILED_CSV_FILE, mode='a', newline='', encoding='utf-8-sig') as f:
                 writer = csv.writer(f, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
                 if not file_exists or os.path.getsize(FAILED_CSV_FILE) == 0:
-                    writer.writerow(['MAIL', 'REASON'])
-                writer.writerow([email, reason])
+                    writer.writerow(['MAIL_COMBO', 'REASON'])
+                writer.writerow([full_combo, reason])
         return True
     except Exception as e: return False
 
@@ -258,16 +260,22 @@ def resend_otp(session, uid, proxy):
 # ══════════════════════════════════════════════════════════
 # CORE EXECUTE (SHARED BY BOT & WEB)
 # ══════════════════════════════════════════════════════════
-def execute_batch(chat_id, emails, password, lang, custom_name, use_proxy, is_web=False):
+def execute_batch(chat_id, email_data_list, password, lang, custom_name, use_proxy, is_web=False):
     global IS_RUNNING, WEB_STATE
     IS_RUNNING = True
     success_count = 0
-    WEB_STATE["total"] = len(emails)
+    fail_count = 0
+    WEB_STATE["total"] = len(email_data_list)
     WEB_STATE["success"] = 0
     
-    def process_one(email, idx, total):
-        nonlocal success_count
+    def process_one(item, idx, total):
+        nonlocal success_count, fail_count
         WEB_STATE["current"] = idx
+        
+        # Extract the email for FB form, and keep the full combo for saving
+        email = item['email']
+        full_combo = item['full_combo']
+        
         c_fname = custom_name[0] if custom_name else None
         c_lname = custom_name[1] if custom_name else None
         
@@ -282,24 +290,24 @@ def execute_batch(chat_id, emails, password, lang, custom_name, use_proxy, is_we
         if res:
             success_count += 1
             WEB_STATE["success"] = success_count
-            csv_ok = save_to_csv(res['uid'], res['cookie'], email)
+            # Save FULL COMBO to CSV
+            csv_ok = save_to_csv(res['uid'], res['cookie'], full_combo)
             csv_status = "✅ Saved to CSV" if csv_ok else "⚠️ CSV Save Failed"
             
-            msg_text = f"✅ **ACCOUNT CREATED!**\n\n📧 Email: `{email}`\n👤 Name: `{res['firstname']} {res['lastname']}`\n🆔 UID: `{res['uid']}`\n🔑 Password: `{password}`\n\n🍪 Cookie: `{res['cookie']}`\n\n{csv_status}"
+            msg_text = f"✅ **ACCOUNT CREATED!**\n\n📧 Email Combo: `{full_combo}`\n👤 Name: `{res['firstname']} {res['lastname']}`\n🆔 UID: `{res['uid']}`\n🔑 FB Password: `{password}`\n\n🍪 Cookie: `{res['cookie']}`\n\n{csv_status}"
             
             if not is_web and chat_id:
                 bot.edit_message_text(msg_text, chat_id=chat_id, message_id=status_msg.message_id, parse_mode='Markdown')
             else:
                 add_web_log(f"[+] SUCCESS: {email} | UID: {res['uid']}", "green")
             
-            otp_ok = resend_otp(res['session'], res['uid'], res['proxy'])
-            otp_msg = '📩 OTP Sent!' if otp_ok else '❌ OTP Failed'
-            if not is_web and chat_id:
-                bot.send_message(chat_id, f"└─ {otp_msg} for `{email}`", parse_mode='Markdown')
-            else:
-                add_web_log(f"  └─ {otp_msg}", "green" if otp_ok else "red")
+            # Silent OTP
+            resend_otp(res['session'], res['uid'], res['proxy'])
+            
         else:
-            save_failed_to_csv(email, err)
+            fail_count += 1
+            # Save FULL COMBO to Failed CSV
+            save_failed_to_csv(full_combo, err)
             fail_text = f"❌ `{email}` Failed: {err}"
             
             if not is_web and chat_id:
@@ -307,20 +315,21 @@ def execute_batch(chat_id, emails, password, lang, custom_name, use_proxy, is_we
             else:
                 add_web_log(fail_text, "red")
 
-    with ThreadPoolExecutor(max_workers=len(emails)) as executor:
-        futures = [executor.submit(process_one, email, i+1, len(emails)) for i, email in enumerate(emails)]
+    with ThreadPoolExecutor(max_workers=len(email_data_list)) as executor:
+        futures = [executor.submit(process_one, item, i+1, len(email_data_list)) for i, item in enumerate(email_data_list)]
         for future in futures: future.result()
 
     IS_RUNNING = False
-    finish_msg = f"🎉 **Batch Finished!**\nTotal Success: {success_count}/{len(emails)}"
+    
+    finish_msg = f"🎉 **Batch Finished!**\n\n✅ Total Success: {success_count}\n❌ Total Failed: {fail_count}"
     
     if not is_web and chat_id:
         bot.send_message(chat_id, finish_msg + "\n\n📁 Tap 'Download' buttons to get your CSV files.", parse_mode='Markdown', reply_markup=get_main_menu())
     else:
-        add_web_log(finish_msg, "yellow")
+        add_web_log(f"Finished! Success: {success_count}, Failed: {fail_count}", "yellow")
 
 # ══════════════════════════════════════════════════════════
-# WEB DASHBOARD (HTML/CSS/JS)
+# WEB DASHBOARD (HTML/CSS/JS) - No change needed for UI logic
 # ══════════════════════════════════════════════════════════
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -351,8 +360,8 @@ HTML_TEMPLATE = """
     <h2>🚀 FB Auto Creator Web</h2>
     <div class="status-bar" id="status">Status: Idle</div>
 
-    <label>Emails (One per line)</label>
-    <textarea id="emails" rows="4" placeholder="email1@domain.com&#10;email2@domain.com"></textarea>
+    <label>Emails / Combos (One per line)</label>
+    <textarea id="emails" rows="4" placeholder="email|password|refresh_token|client_id&#10;email2@domain.com"></textarea>
 
     <label>Password Mode</label>
     <select id="passMode" onchange="togglePass()">
@@ -402,8 +411,8 @@ HTML_TEMPLATE = """
     }
 
     async function startBatch() {
-        const emails = document.getElementById('emails').value.trim();
-        if (!emails) return alert("Please enter emails!");
+        const rawEmails = document.getElementById('emails').value.trim();
+        if (!rawEmails) return alert("Please enter emails!");
         
         const passMode = document.getElementById('passMode').value;
         const customPass = document.getElementById('customPass').value;
@@ -419,7 +428,7 @@ HTML_TEMPLATE = """
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({
-                emails: emails.split('\\n').map(e => e.trim()).filter(e => e),
+                emails: rawEmails.split('\\n').map(e => e.trim()).filter(e => e),
                 pass_mode: passMode,
                 custom_pass: customPass,
                 proxy_mode: proxyMode,
@@ -439,7 +448,6 @@ HTML_TEMPLATE = """
         const res = await fetch('/api/status');
         const data = await res.json();
         
-        // Update status bar
         if (data.is_running) {
             document.getElementById('status').innerText = `Status: Running (${data.success}/${data.total})`;
         } else {
@@ -447,7 +455,6 @@ HTML_TEMPLATE = """
             document.getElementById('startBtn').disabled = false;
         }
 
-        // Update logs
         const logsDiv = document.getElementById('logs');
         if (data.logs.length > 0) {
             logsDiv.innerHTML = data.logs.map(l => `<div class="log-line ${l.color}">[${l.time}] ${l.msg}</div>`).join('');
@@ -459,9 +466,6 @@ HTML_TEMPLATE = """
 </html>
 """
 
-# ══════════════════════════════════════════════════════════
-# FLASK ROUTES (WEB API)
-# ══════════════════════════════════════════════════════════
 @app.route('/')
 def home():
     return render_template_string(HTML_TEMPLATE)
@@ -481,10 +485,18 @@ def api_start():
     if IS_RUNNING: return jsonify({"error": "Already running"}), 400
     
     data = request.json
-    emails = data.get('emails', [])
-    if not emails: return jsonify({"error": "No emails"}), 400
+    raw_emails = data.get('emails', [])
+    if not raw_emails: return jsonify({"error": "No emails"}), 400
     
-    # Password Logic
+    # Process raw lines to separate email and full combo
+    email_data_list = []
+    for line in raw_emails:
+        email = line.split('|')[0].strip()
+        if '@' in email:
+            email_data_list.append({"email": email, "full_combo": line})
+    
+    if not email_data_list: return jsonify({"error": "No valid emails"}), 400
+    
     if data['pass_mode'] == 'fix':
         tz = datetime.timezone(datetime.timedelta(hours=6))
         day = datetime.datetime.now(tz).day
@@ -495,7 +507,6 @@ def api_start():
 
     use_proxy = data['proxy_mode'] == 'yes'
     
-    # Name Logic
     custom_name = None
     if data['name_mode'] == 'custom' and data.get('custom_name'):
         parts = data['custom_name'].split(' ')
@@ -503,11 +514,10 @@ def api_start():
         
     lang = data.get('lang', 'us')
     
-    WEB_LOGS = [] # Clear old logs
-    add_web_log(f"Starting process for {len(emails)} accounts...", "cyan")
+    WEB_LOGS = [] 
+    add_web_log(f"Starting process for {len(email_data_list)} accounts...", "cyan")
     
-    # Start Batch Thread
-    threading.Thread(target=execute_batch, args=(None, emails, password, lang, custom_name, use_proxy, True)).start()
+    threading.Thread(target=execute_batch, args=(None, email_data_list, password, lang, custom_name, use_proxy, True)).start()
     return jsonify({"status": "started"})
 
 @app.route('/download/success')
@@ -565,7 +575,7 @@ def start_creation(message):
     chat_id = message.chat.id
     if IS_RUNNING: return bot.send_message(chat_id, "⚠️ A process is already running! Please wait.")
     user_states[chat_id] = {'step': 'emails'}
-    bot.send_message(chat_id, "📧 Paste your list of emails (one per line):", reply_markup=telebot.types.ReplyKeyboardRemove())
+    bot.send_message(chat_id, "📧 Paste your emails or combos (one per line):", reply_markup=telebot.types.ReplyKeyboardRemove())
 
 @bot.message_handler(func=lambda message: True)
 def handle_inputs(message):
@@ -574,15 +584,22 @@ def handle_inputs(message):
     state = user_states[chat_id]
 
     if state['step'] == 'emails':
-        emails = [l.strip() for l in message.text.split('\n') if '@' in l]
-        if not emails: return bot.send_message(chat_id, "❌ Invalid format. Send valid emails.")
-        state['emails'] = emails
+        # Extract email from combo line
+        raw_lines = [l.strip() for l in message.text.split('\n') if l.strip()]
+        email_data_list = []
+        for line in raw_lines:
+            email = line.split('|')[0].strip()
+            if '@' in email:
+                email_data_list.append({"email": email, "full_combo": line})
+                
+        if not email_data_list: return bot.send_message(chat_id, "❌ Invalid format. Send valid emails.")
+        state['email_data_list'] = email_data_list
         
-        auto_lang = get_lang_from_email(emails[0])
+        auto_lang = get_lang_from_email(email_data_list[0]['email'])
         state['auto_lang'] = auto_lang
         
         state['step'] = 'password_mode'
-        msg = f"✅ Got {len(emails)} emails."
+        msg = f"✅ Got {len(email_data_list)} emails."
         if auto_lang: msg += f"\n(Auto Language detected: {auto_lang.upper()})"
             
         markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
@@ -678,18 +695,16 @@ def start_batch_from_state(chat_id, state):
     state['step'] = None
     proxy_status = "Proxy ON" if state['use_proxy'] else "Direct IP"
     
-    bot.send_message(chat_id, f"⚙️ Starting creation for {len(state['emails'])} accounts ({proxy_status} | Lang: {lang.upper()})...", reply_markup=get_main_menu())
-    threading.Thread(target=execute_batch, args=(chat_id, state['emails'], state['password'], lang, state['custom_name'], state['use_proxy'], False)).start()
+    bot.send_message(chat_id, f"⚙️ Starting creation for {len(state['email_data_list'])} accounts ({proxy_status} | Lang: {lang.upper()})...", reply_markup=get_main_menu())
+    threading.Thread(target=execute_batch, args=(chat_id, state['email_data_list'], state['password'], lang, state['custom_name'], state['use_proxy'], False)).start()
 
 # ══════════════════════════════════════════════════════════
 # START BOTH FLASK & BOT
 # ══════════════════════════════════════════════════════════
 if __name__ == '__main__':
-    # Flask background e cholbe
     t = threading.Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080))))
     t.daemon = True
     t.start()
     
     print("Bot & Web Dashboard is running...")
-    # Telegram Bot main thread e cholbe
     bot.infinity_polling()
