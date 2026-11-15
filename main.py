@@ -81,10 +81,12 @@ def is_authorized(chat_id):
     return str(chat_id) in load_auth_users()
 
 # ══════════════════════════════════════════════════════════
-# HOTMAIL OTP AUTO-FETCHER (3s Refresh)
+# HOTMAIL OTP AUTO-FETCHER (3s Refresh - 60s Limit)
 # ══════════════════════════════════════════════════════════
 def fetch_otp_from_hotmail(email_addr, refresh_token, client_id, chat_id):
-    for attempt in range(10): # 10 attempts * 3 seconds = 30 seconds
+    bot.send_message(chat_id, f"🔄 _Auto-checking Hotmail for `{email_addr}` (Every 3s for 60s)..._", parse_mode='Markdown')
+    
+    for attempt in range(20): # 20 attempts * 3 seconds = 60 seconds
         time.sleep(3)
         try:
             # 1. Get Access Token
@@ -98,9 +100,9 @@ def fetch_otp_from_hotmail(email_addr, refresh_token, client_id, chat_id):
             access_token = token_res.json().get("access_token")
             if not access_token: continue
 
-            # 2. Read Inbox
+            # 2. Read Inbox (Sorted by Newest)
             msg_res = requests.get(
-                "https://graph.microsoft.com/v1.0/me/messages?$top=5&$select=subject,body,receivedDateTime",
+                "https://graph.microsoft.com/v1.0/me/messages?$top=10&$orderby=receivedDateTime%20desc&$select=subject,body,receivedDateTime,from",
                 headers={"Authorization": f"Bearer {access_token}"},
                 timeout=10
             )
@@ -109,11 +111,12 @@ def fetch_otp_from_hotmail(email_addr, refresh_token, client_id, chat_id):
             for msg in messages:
                 body = msg.get("body", {}).get("content", "")
                 subject = msg.get("subject", "")
+                sender = msg.get("from", {}).get("emailAddress", {}).get("address", "")
                 
-                # Check for Facebook/OTP in subject or body
-                if "facebook" in subject.lower() or "code" in subject.lower() or "verification" in subject.lower():
-                    # Search for 5 or 6 digit number
-                    match = re.search(r'\b(\d{5,6})\b', body)
+                # Check if it's from Facebook
+                if "facebook" in sender.lower() or "facebook" in subject.lower() or "code" in subject.lower():
+                    # Search for 6 digit number or 5 digit number
+                    match = re.search(r'\b(\d{6})\b', body) or re.search(r'\b(\d{5})\b', body)
                     if match:
                         code = match.group(1)
                         bot.send_message(chat_id, f"📩 **OTP FOUND for `{email_addr}`**\n\n🔑 Code: `{code}`\n\n_Copied from Hotmail inbox!_", parse_mode='Markdown')
@@ -121,8 +124,8 @@ def fetch_otp_from_hotmail(email_addr, refresh_token, client_id, chat_id):
         except Exception:
             pass
     
-    # If not found after 30 seconds
-    bot.send_message(chat_id, f"⚠️ Could not find OTP for `{email_addr}` in Hotmail inbox.", parse_mode='Markdown')
+    # If not found after 60 seconds
+    bot.send_message(chat_id, f"⚠️ Could not find OTP for `{email_addr}` in Hotmail inbox (Timeout 60s).", parse_mode='Markdown')
 
 # ══════════════════════════════════════════════════════════
 # DOMAIN TO LANGUAGE MAP
@@ -355,7 +358,8 @@ def execute_batch(chat_id, email_data_list, password, lang, custom_name, use_pro
             csv_ok = save_to_csv(res['uid'], res['cookie'], full_combo)
             csv_status = "✅ Saved to CSV" if csv_ok else "⚠️ CSV Save Failed"
             
-            msg_text = f"✅ **ACCOUNT CREATED!**\n\n📧 Email Combo: `{full_combo}`\n👤 Name: `{res['firstname']} {res['lastname']}`\n🆔 UID: `{res['uid']}`\n🔑 FB Password: `{password}`\n\n🍪 Cookie: `{res['cookie']}`\n\n{csv_status}"
+            # Ekhane Email Combo bad diye sudhu 'Email' dekhano hoyeche
+            msg_text = f"✅ **ACCOUNT CREATED!**\n\n📧 Email: `{email}`\n👤 Name: `{res['firstname']} {res['lastname']}`\n🆔 UID: `{res['uid']}`\n🔑 FB Password: `{password}`\n\n🍪 Cookie: `{res['cookie']}`\n\n{csv_status}"
             
             if not is_web and chat_id: bot.edit_message_text(msg_text, chat_id=chat_id, message_id=status_msg.message_id, parse_mode='Markdown')
             else: add_web_log(f"[+] SUCCESS: {email} | UID: {res['uid']}", "green")
@@ -369,7 +373,6 @@ def execute_batch(chat_id, email_data_list, password, lang, custom_name, use_pro
                 refresh_token = combo_parts[2].strip()
                 client_id = combo_parts[3].strip()
                 if not is_web and chat_id:
-                    bot.send_message(chat_id, f"🔄 _Auto-checking Hotmail inbox for OTP every 3 seconds..._", parse_mode='Markdown')
                     threading.Thread(target=fetch_otp_from_hotmail, args=(email, refresh_token, client_id, chat_id)).start()
         else:
             fail_count += 1
