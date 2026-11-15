@@ -13,6 +13,7 @@ import string
 import threading
 import csv
 import datetime
+import requests
 from concurrent.futures import ThreadPoolExecutor
 from flask import Flask, request, jsonify, send_file, render_template_string, session, redirect, url_for
 
@@ -23,39 +24,12 @@ except ImportError:
     exit()
 
 # ══════════════════════════════════════════════════════════
-# SETTINGS (Ekhane tomar details boshao)
+# SETTINGS
 # ══════════════════════════════════════════════════════════
 BOT_TOKEN = "9025360567:AAEJ2Jq2FSAVpDOVC3UCPYViQE9-sNI7NSk" 
 ADMIN_ID = "6408202140" # <--- Tomar Telegram ID ekhane boshao
 WEB_PASSWORD = "SOHAV_ADMIN"
 bot = telebot.TeleBot(BOT_TOKEN)
-
-# Auth File for Resellers
-AUTH_FILE = "authorized_users.txt"
-
-def load_auth_users():
-    if os.path.exists(AUTH_FILE):
-        with open(AUTH_FILE, 'r') as f:
-            return [line.strip() for line in f if line.strip()]
-    return []
-
-def save_auth_user(user_id):
-    users = load_auth_users()
-    if str(user_id) not in users:
-        with open(AUTH_FILE, 'a') as f:
-            f.write(f"{user_id}\n")
-
-def remove_auth_user(user_id):
-    users = load_auth_users()
-    if str(user_id) in users:
-        users.remove(str(user_id))
-        with open(AUTH_FILE, 'w') as f:
-            for u in users:
-                f.write(f"{u}\n")
-
-def is_authorized(chat_id):
-    if str(chat_id) == ADMIN_ID: return True
-    return str(chat_id) in load_auth_users()
 
 # ══════════════════════════════════════════════════════════
 # FLASK WEB SERVER SETUP
@@ -80,8 +54,75 @@ GRAPHQL_URL = "https://web.facebook.com/api/graphql/"
 CSV_FILE = "fb_accounts.csv"
 FAILED_CSV_FILE = "failed_accounts.csv"
 PROXY_FILE = "proxies.txt" 
+AUTH_FILE = "authorized_users.txt"
 
 file_lock = threading.Lock()
+
+def load_auth_users():
+    if os.path.exists(AUTH_FILE):
+        with open(AUTH_FILE, 'r') as f:
+            return [line.strip() for line in f if line.strip()]
+    return []
+
+def save_auth_user(user_id):
+    users = load_auth_users()
+    if str(user_id) not in users:
+        with open(AUTH_FILE, 'a') as f: f.write(f"{user_id}\n")
+
+def remove_auth_user(user_id):
+    users = load_auth_users()
+    if str(user_id) in users:
+        users.remove(str(user_id))
+        with open(AUTH_FILE, 'w') as f:
+            for u in users: f.write(f"{u}\n")
+
+def is_authorized(chat_id):
+    if str(chat_id) == ADMIN_ID: return True
+    return str(chat_id) in load_auth_users()
+
+# ══════════════════════════════════════════════════════════
+# HOTMAIL OTP AUTO-FETCHER (3s Refresh)
+# ══════════════════════════════════════════════════════════
+def fetch_otp_from_hotmail(email_addr, refresh_token, client_id, chat_id):
+    for attempt in range(10): # 10 attempts * 3 seconds = 30 seconds
+        time.sleep(3)
+        try:
+            # 1. Get Access Token
+            token_res = requests.post("https://login.microsoftonline.com/common/oauth2/v2.0/token", data={
+                "client_id": client_id,
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+                "scope": "https://graph.microsoft.com/.default offline_access"
+            }, timeout=10)
+            
+            access_token = token_res.json().get("access_token")
+            if not access_token: continue
+
+            # 2. Read Inbox
+            msg_res = requests.get(
+                "https://graph.microsoft.com/v1.0/me/messages?$top=5&$select=subject,body,receivedDateTime",
+                headers={"Authorization": f"Bearer {access_token}"},
+                timeout=10
+            )
+            
+            messages = msg_res.json().get("value", [])
+            for msg in messages:
+                body = msg.get("body", {}).get("content", "")
+                subject = msg.get("subject", "")
+                
+                # Check for Facebook/OTP in subject or body
+                if "facebook" in subject.lower() or "code" in subject.lower() or "verification" in subject.lower():
+                    # Search for 5 or 6 digit number
+                    match = re.search(r'\b(\d{5,6})\b', body)
+                    if match:
+                        code = match.group(1)
+                        bot.send_message(chat_id, f"📩 **OTP FOUND for `{email_addr}`**\n\n🔑 Code: `{code}`\n\n_Copied from Hotmail inbox!_", parse_mode='Markdown')
+                        return # Stop after finding
+        except Exception:
+            pass
+    
+    # If not found after 30 seconds
+    bot.send_message(chat_id, f"⚠️ Could not find OTP for `{email_addr}` in Hotmail inbox.", parse_mode='Markdown')
 
 # ══════════════════════════════════════════════════════════
 # DOMAIN TO LANGUAGE MAP
@@ -313,11 +354,23 @@ def execute_batch(chat_id, email_data_list, password, lang, custom_name, use_pro
             success_count += 1; WEB_STATE["success"] = success_count
             csv_ok = save_to_csv(res['uid'], res['cookie'], full_combo)
             csv_status = "✅ Saved to CSV" if csv_ok else "⚠️ CSV Save Failed"
+            
             msg_text = f"✅ **ACCOUNT CREATED!**\n\n📧 Email Combo: `{full_combo}`\n👤 Name: `{res['firstname']} {res['lastname']}`\n🆔 UID: `{res['uid']}`\n🔑 FB Password: `{password}`\n\n🍪 Cookie: `{res['cookie']}`\n\n{csv_status}"
             
             if not is_web and chat_id: bot.edit_message_text(msg_text, chat_id=chat_id, message_id=status_msg.message_id, parse_mode='Markdown')
             else: add_web_log(f"[+] SUCCESS: {email} | UID: {res['uid']}", "green")
+            
+            # Resend OTP to make sure code arrives
             resend_otp(res['session'], res['uid'], res['proxy'])
+            
+            # Trigger OTP Auto-Fetcher
+            combo_parts = full_combo.split('|')
+            if len(combo_parts) >= 4:
+                refresh_token = combo_parts[2].strip()
+                client_id = combo_parts[3].strip()
+                if not is_web and chat_id:
+                    bot.send_message(chat_id, f"🔄 _Auto-checking Hotmail inbox for OTP every 3 seconds..._", parse_mode='Markdown')
+                    threading.Thread(target=fetch_otp_from_hotmail, args=(email, refresh_token, client_id, chat_id)).start()
         else:
             fail_count += 1
             save_failed_to_csv(full_combo, err)
@@ -332,7 +385,6 @@ def execute_batch(chat_id, email_data_list, password, lang, custom_name, use_pro
     IS_RUNNING = False
     finish_msg = f"🎉 **Batch Finished!**\n\n✅ Total Success: {success_count}\n❌ Total Failed: {fail_count}\n\n👉 _Type /start to open menu again._"
     
-    # Keyboard Remove & Only Show Result
     if not is_web and chat_id: 
         bot.send_message(chat_id, finish_msg, parse_mode='Markdown', reply_markup=ReplyKeyboardRemove())
     else: 
@@ -573,7 +625,6 @@ def send_welcome(message):
     if not is_authorized(chat_id):
         return bot.reply_to(message, "⛔ **Access Denied!**\n\nYou are not authorized to use this bot. Please contact the admin to get access.")
     
-    # Show User ID on start
     bot.reply_to(message, f"Welcome to FB Auto Creator Bot! 🤖\n\n🆔 **Your Telegram ID:** `{chat_id}`\n\nBot ready. Click below to start.", reply_markup=get_main_menu(chat_id), parse_mode='Markdown')
 
 @bot.message_handler(commands=['adduser'])
@@ -673,6 +724,11 @@ def handle_inputs(message):
     if chat_id not in user_states: return
     state = user_states[chat_id]
 
+    if message.text == '🔙 Cancel':
+        user_states[chat_id] = {}
+        bot.send_message(chat_id, "❌ Process Cancelled. Back to Main Menu.", reply_markup=get_main_menu(chat_id))
+        return
+
     if state['step'] == 'emails':
         raw_lines = [l.strip() for l in message.text.split('\n') if l.strip()]
         email_data_list = []
@@ -687,8 +743,10 @@ def handle_inputs(message):
         state['step'] = 'password_mode'
         msg = f"✅ Got {len(email_data_list)} emails."
         if auto_lang: msg += f"\n(Auto Language detected: {auto_lang.upper()})"
+        
         markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
         markup.add('Fix Password (SOHAVdd)', 'Custom Password')
+        markup.add('🔙 Cancel')
         bot.send_message(chat_id, msg + "\n🔐 Select Password Mode:", reply_markup=markup)
 
     elif state['step'] == 'password_mode':
@@ -700,7 +758,7 @@ def handle_inputs(message):
             show_proxy_menu(chat_id)
         elif 'Custom Password' in message.text:
             state['step'] = 'custom_password'
-            bot.send_message(chat_id, "✍️ Enter your Custom Password:", reply_markup=ReplyKeyboardRemove())
+            bot.send_message(chat_id, "✍️ Enter your Custom Password:", reply_markup=telebot.types.ReplyKeyboardRemove())
         else: bot.send_message(chat_id, "❌ Please select from the buttons.")
 
     elif state['step'] == 'custom_password':
@@ -721,6 +779,7 @@ def handle_inputs(message):
             state['step'] = 'name_mode'
             markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
             markup.add('Auto Name', 'Custom Name')
+            markup.add('🔙 Cancel')
             bot.send_message(chat_id, "👤 Select Name Mode:", reply_markup=markup)
 
     elif state['step'] == 'name_mode':
@@ -748,12 +807,14 @@ def show_proxy_menu(chat_id):
     proxy_text = f"Use Proxy ({proxy_count} Loaded)" if proxy_count > 0 else "Use Proxy (0 Loaded)"
     markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
     markup.add('No Proxy (Direct)', proxy_text)
+    markup.add('🔙 Cancel')
     bot.send_message(chat_id, "🌐 Select Proxy Mode:", reply_markup=markup)
 
 def show_languages(chat_id):
     markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True, row_width=4)
     buttons = [KeyboardButton(code) for code in LANG_MAP.keys()]
     markup.add(*buttons)
+    markup.add(KeyboardButton('🔙 Cancel'))
     bot.send_message(chat_id, "🌍 Select Language Code:", reply_markup=markup)
 
 def start_batch_from_state(chat_id, state):
