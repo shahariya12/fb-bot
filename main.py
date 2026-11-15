@@ -26,13 +26,13 @@ except ImportError:
 # ══════════════════════════════════════════════════════════
 # BOT SETTINGS
 # ══════════════════════════════════════════════════════════
-BOT_TOKEN_1 = "9025360567:AAEJ2Jq2FSAVpDOVC3UCPYViQE9-sNI7NSk" # Main Bot (Creator)
-BOT_TOKEN_2 = "9028640496:AAG8y-z28g98sjYfEjLC5yanhhA-YgP9zHQ" # Download Bot (Cookie)
+BOT_TOKEN_1 = "9025360567:AAEJ2Jq2FSAVpDOVC3UCPYViQE9-sNI7NSk" # Main Bot
+BOT_TOKEN_2 = "9028640496:AAG8y-z28g98sjYfEjLC5yanhhA-YgP9zHQ" # Download Bot
 
 bot1 = telebot.TeleBot(BOT_TOKEN_1)
 bot2 = telebot.TeleBot(BOT_TOKEN_2)
 
-ADMIN_ID = "6408202140" # Tomar Telegram ID
+ADMIN_ID = "6408202140"
 WEB_PASSWORD = "SOHAV_ADMIN"
 
 # ══════════════════════════════════════════════════════════
@@ -41,8 +41,9 @@ WEB_PASSWORD = "SOHAV_ADMIN"
 app = Flask('')
 app.secret_key = "SOHAV_SECRET_KEY_123"
 WEB_LOGS = []
+WEB_OTPS = [] # <--- NEW: OTPs for Web UI
 IS_RUNNING = False
-CANCEL_FLAG = False  # Process cancel korar jonno flag
+CANCEL_FLAG = False
 WEB_STATE = {"total": 0, "success": 0, "current": 0}
 
 def add_web_log(msg, color="white"):
@@ -86,9 +87,9 @@ def is_authorized(chat_id):
     return str(chat_id) in load_auth_users()
 
 # ══════════════════════════════════════════════════════════
-# HOTMAIL OTP AUTO-FETCHER (Silent Mode)
+# HOTMAIL OTP AUTO-FETCHER (UPDATED FOR WEB)
 # ══════════════════════════════════════════════════════════
-def fetch_otp_from_hotmail(email_addr, refresh_token, client_id, chat_id):
+def fetch_otp_from_hotmail(email_addr, refresh_token, client_id, chat_id=None):
     global CANCEL_FLAG
     for attempt in range(2400): 
         if CANCEL_FLAG: return
@@ -123,12 +124,20 @@ def fetch_otp_from_hotmail(email_addr, refresh_token, client_id, chat_id):
 
                     if match:
                         code = match.group(1)
-                        bot1.send_message(chat_id, f"📩 **OTP FOUND for `{email_addr}`**\n\n🔑 Code: `{code}`\n\n_Copied from Hotmail inbox!_", parse_mode='Markdown')
+                        
+                        # Web e pathanor jonno save
+                        WEB_OTPS.append({"email": email_addr, "code": code})
+                        add_web_log(f"OTP FOUND: {code} for {email_addr}", "green")
+                        
+                        # Telegram e pathanor jonno
+                        if chat_id: 
+                            bot1.send_message(chat_id, f"📩 **OTP FOUND for `{email_addr}`**\n\n🔑 Code: `{code}`\n\n_Copied from Hotmail inbox!_", parse_mode='Markdown')
                         return 
         except Exception:
             pass
     
-    bot1.send_message(chat_id, f"⚠️ Could not find OTP for `{email_addr}` in Hotmail inbox (Timeout).", parse_mode='Markdown')
+    if chat_id:
+        bot1.send_message(chat_id, f"⚠️ Could not find OTP for `{email_addr}` in Hotmail inbox (Timeout).", parse_mode='Markdown')
 
 # ══════════════════════════════════════════════════════════
 # DOMAIN TO LANGUAGE MAP
@@ -361,7 +370,6 @@ def execute_batch(chat_id, email_data_list, password, lang, custom_name, use_pro
         if res:
             success_count += 1; WEB_STATE["success"] = success_count
             csv_ok = save_to_csv(res['uid'], password, res['cookie'], full_combo)
-            csv_status = "✅ Saved to CSV" if csv_ok else "⚠️ CSV Save Failed"
             
             msg_text = f"✅ **ACCOUNT CREATED!**\n\n📧 Email: `{email}`"
             
@@ -374,8 +382,8 @@ def execute_batch(chat_id, email_data_list, password, lang, custom_name, use_pro
             if len(combo_parts) >= 4:
                 refresh_token = combo_parts[2].strip()
                 client_id = combo_parts[3].strip()
-                if not is_web and chat_id:
-                    threading.Thread(target=fetch_otp_from_hotmail, args=(email, refresh_token, client_id, chat_id)).start()
+                # Start OTP fetch in background (web and bot)
+                threading.Thread(target=fetch_otp_from_hotmail, args=(email, refresh_token, client_id, chat_id if not is_web else None)).start()
         else:
             fail_count += 1
             save_failed_to_csv(full_combo, err)
@@ -391,97 +399,157 @@ def execute_batch(chat_id, email_data_list, password, lang, custom_name, use_pro
     if CANCEL_FLAG:
         finish_msg = f"🛑 **Batch Cancelled!**\n\n✅ Total Success: {success_count}\n❌ Total Failed: {fail_count}"
     else:
-        finish_msg = f"🎉 **Batch Finished!**\n\n✅ Total Success: {success_count}\n❌ Total Failed: {fail_count}\n\n👉 _Type /start to open menu again._"
+        finish_msg = f"🎉 **Batch Finished!**\n\n✅ Total Success: {success_count}\n❌ Total Failed: {fail_count}"
     
     if not is_web and chat_id: 
-        bot1.send_message(chat_id, finish_msg, parse_mode='Markdown', reply_markup=get_main_menu_1(chat_id))
+        bot1.send_message(chat_id, finish_msg + "\n\n👉 _Type /start to open menu._", parse_mode='Markdown', reply_markup=get_main_menu_1(chat_id))
     else: 
         add_web_log(f"Finished! Success: {success_count}, Failed: {fail_count}", "yellow")
 
 # ══════════════════════════════════════════════════════════
-# WEB DASHBOARD
+# MOBILE APP STYLE WEB DASHBOARD (WITH OTP COPY)
 # ══════════════════════════════════════════════════════════
 LOGIN_TEMPLATE = """
-<!DOCTYPE html><html><body style="background:#0f172a; color:white; text-align:center; padding-top:100px; font-family:sans-serif;">
-<h2>🔒 Admin Login</h2>
-<form method="POST">
-    <input type="password" name="password" placeholder="Enter Password" style="padding:10px; border-radius:5px; border:none;"><br><br>
-    <button type="submit" style="padding:10px 20px; background:#0ea5e9; border:none; color:white; border-radius:5px; font-weight:bold;">LOGIN</button>
-</form>
-{% if error %}<p style="color:red;">{{ error }}</p>{% endif %}
-</body></html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>SOHAV App Login</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background: #0f172a; color: white; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; }
+        .card { background: #1e293b; padding: 30px 20px; border-radius: 16px; width: 100%; max-width: 350px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); text-align: center; }
+        h2 { margin-top: 0; color: #38bdf8; font-size: 24px; }
+        input { width: 100%; padding: 14px; margin: 15px 0; background: #0f172a; border: 1px solid #334155; border-radius: 10px; color: white; font-size: 16px; box-sizing: border-box; }
+        button { width: 100%; padding: 14px; background: #0ea5e9; color: white; border: none; border-radius: 10px; font-weight: bold; font-size: 16px; cursor: pointer; }
+        button:active { background: #0284c7; }
+        .error { color: #f87171; font-size: 14px; margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h2>🔒 Login</h2>
+        <form method="POST">
+            <input type="password" name="password" placeholder="Enter Password" required>
+            <button type="submit">Unlock App</button>
+        </form>
+        {% if error %}<p class="error">{{ error }}</p>{% endif %}
+    </div>
+</body>
+</html>
 """
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>FB Auto Creator Admin</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#0f172a">
+    <title>SOHAV Creator App</title>
     <style>
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0f172a; color: #e2e8f0; padding: 20px; margin: 0; }
-        .container { max-width: 800px; margin: auto; background: #1e293b; padding: 20px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.5); }
-        h2 { color: #38bdf8; text-align: center; }
-        label { font-size: 14px; color: #94a3b8; margin-bottom: 5px; display: block; }
-        textarea, input, select { width: 100%; padding: 10px; margin-bottom: 15px; background: #0f172a; color: #e2e8f0; border: 1px solid #334155; border-radius: 6px; box-sizing: border-box; }
-        .btn { width: 100%; padding: 12px; background: #0ea5e9; color: white; border: none; border-radius: 6px; font-weight: bold; cursor: pointer; font-size: 16px; }
-        .btn:hover { background: #0284c7; }
-        .btn:disabled { background: #475569; cursor: not-allowed; }
-        .btn-row { display: flex; gap: 10px; margin-bottom: 15px; }
-        .btn-row a { flex: 1; text-align: center; padding: 10px; background: #10b981; color: white; text-decoration: none; border-radius: 6px; font-weight: bold; }
-        .btn-row a.fail { background: #ef4444; }
-        #logs { background: #0f172a; height: 300px; overflow-y: auto; padding: 10px; border-radius: 6px; font-family: monospace; font-size: 13px; border: 1px solid #334155; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; padding-bottom: 80px; }
+        .header { background: #1e293b; padding: 15px 20px; position: sticky; top: 0; z-index: 100; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }
+        .header h1 { font-size: 18px; margin: 0; color: #38bdf8; }
+        .status-bar { padding: 10px 20px; font-size: 13px; font-weight: bold; text-align: center; background: #334155; color: white; }
+        .content { padding: 20px; }
+        .card { background: #1e293b; padding: 15px; border-radius: 12px; margin-bottom: 15px; }
+        label { display: block; font-size: 13px; color: #94a3b8; margin-bottom: 8px; font-weight: 600; }
+        textarea, select, input { width: 100%; padding: 12px; background: #0f172a; border: 1px solid #334155; border-radius: 8px; color: white; font-size: 15px; margin-bottom: 12px; box-sizing: border-box; }
+        textarea { resize: vertical; min-height: 100px; }
+        .btn { width: 100%; padding: 14px; background: #0ea5e9; color: white; border: none; border-radius: 10px; font-weight: bold; font-size: 16px; cursor: pointer; }
+        .btn.stop { background: #ef4444; display: none; }
+        .btn:active { opacity: 0.8; }
+        .btn-row { display: flex; gap: 10px; margin-top: 10px; }
+        .btn-row .btn { flex: 1; font-size: 14px; padding: 12px; }
+        .btn-row .btn.success { background: #10b981; }
+        .btn-row .btn.failed { background: #ef4444; }
+        
+        /* OTP Section */
+        #otp-container { display: none; background: #064e3b; border: 1px solid #10b981; padding: 15px; border-radius: 12px; margin-bottom: 15px; }
+        .otp-item { display: flex; justify-content: space-between; align-items: center; background: #0f172a; padding: 10px; border-radius: 8px; margin-bottom: 8px; border-left: 4px solid #10b981; }
+        .otp-code { font-family: monospace; font-size: 18px; font-weight: bold; color: #4ade80; letter-spacing: 2px; }
+        .otp-email { font-size: 11px; color: #94a3b8; display: block; margin-bottom: 4px; }
+        .copy-btn { background: #0ea5e9; color: white; border: none; border-radius: 6px; padding: 6px 12px; font-size: 12px; font-weight: bold; cursor: pointer; }
+        .copy-btn:active { background: #0284c7; }
+
+        #logs { background: #000; height: 200px; overflow-y: auto; padding: 10px; border-radius: 8px; font-family: monospace; font-size: 12px; border: 1px solid #334155; margin-top: 15px; color: #ccc; }
         .log-line { margin-bottom: 4px; }
         .cyan { color: #22d3ee; } .green { color: #4ade80; } .red { color: #f87171; } .yellow { color: #fbbf24; } .white { color: #e2e8f0; }
-        .status-bar { background: #334155; padding: 10px; border-radius: 6px; margin-bottom: 15px; font-weight: bold; text-align: center; }
+        
+        .bottom-nav { position: fixed; bottom: 0; width: 100%; background: #1e293b; display: flex; border-top: 1px solid #334155; padding-bottom: env(safe-area-inset-bottom); }
+        .nav-item { flex: 1; text-align: center; padding: 15px 0; color: #94a3b8; font-size: 12px; text-decoration: none; font-weight: bold; }
+        .nav-item.active { color: #0ea5e9; }
     </style>
 </head>
 <body>
-<div class="container">
-    <h2>🚀 Admin Dashboard</h2>
+    <div class="header">
+        <h1>🚀 Creator App</h1>
+        <span style="font-size:12px; color:#94a3b8;">v2.1</span>
+    </div>
     <div class="status-bar" id="status">Status: Idle</div>
 
-    <label>Emails / Combos (One per line)</label>
-    <textarea id="emails" rows="4" placeholder="email|password|refresh_token|client_id&#10;email2@domain.com"></textarea>
+    <div class="content" id="mainForm">
+    
+        <!-- OTP DISPLAY SECTION -->
+        <div id="otp-container">
+            <label style="color:#4ade80; margin-bottom:10px;">📩 Recent OTPs</label>
+            <div id="otp-list"></div>
+        </div>
 
-    <label>Password Mode</label>
-    <select id="passMode" onchange="togglePass()">
-        <option value="fix">Fix Password (SOHAVdd)</option>
-        <option value="custom">Custom Password</option>
-    </select>
-    <input type="text" id="customPass" placeholder="Enter Custom Password" style="display:none;">
+        <div class="card">
+            <label>Emails / Combos</label>
+            <textarea id="emails" placeholder="email|password|refresh_token|client_id"></textarea>
 
-    <label>Proxy Mode</label>
-    <select id="proxyMode">
-        <option value="no">No Proxy (Direct)</option>
-        <option value="yes">Use Proxy (Auto from file)</option>
-    </select>
+            <label>Password Mode</label>
+            <select id="passMode" onchange="togglePass()">
+                <option value="fix">Fix Password (SOHAVdd)</option>
+                <option value="custom">Custom Password</option>
+            </select>
+            <input type="text" id="customPass" placeholder="Enter Custom Password" style="display:none;">
 
-    <label>Name Mode</label>
-    <select id="nameMode" onchange="toggleName()">
-        <option value="auto">Auto Name</option>
-        <option value="custom">Custom Name</option>
-    </select>
-    <input type="text" id="customName" placeholder="Firstname Lastname" style="display:none;">
+            <label>Proxy Mode</label>
+            <select id="proxyMode">
+                <option value="no">No Proxy (Direct)</option>
+                <option value="yes">Use Proxy (Auto)</option>
+            </select>
 
-    <label>Language</label>
-    <select id="lang">
-        <option value="de">German (DE)</option>
-        <option value="fr">French (FR)</option>
-        <option value="br">Portuguese (BR)</option>
-        <option value="us">English (US)</option>
-    </select>
+            <label>Name Mode</label>
+            <select id="nameMode" onchange="toggleName()">
+                <option value="auto">Auto Name</option>
+                <option value="custom">Custom Name</option>
+            </select>
+            <input type="text" id="customName" placeholder="Firstname Lastname" style="display:none;">
 
-    <button class="btn" id="startBtn" onclick="startBatch()">START PROCESS</button>
+            <label>Language</label>
+            <select id="lang">
+                <option value="de">German (DE)</option>
+                <option value="fr">French (FR)</option>
+                <option value="br">Portuguese (BR)</option>
+                <option value="us">English (US)</option>
+            </select>
 
-    <div class="btn-row" style="margin-top: 15px;">
-        <a href="/download/success">Download Success CSV</a>
-        <a href="/download/failed" class="fail">Download Failed CSV</a>
+            <button class="btn" id="startBtn" onclick="startBatch()">▶ START PROCESS</button>
+            <button class="btn stop" id="stopBtn" onclick="stopBatch()">🛑 STOP PROCESS</button>
+        </div>
+
+        <div class="card">
+            <label>Downloads</label>
+            <div class="btn-row">
+                <a href="/download/success" class="btn success" style="text-decoration:none; text-align:center;">📁 Success CSV</a>
+                <a href="/download/failed" class="btn failed" style="text-decoration:none; text-align:center;">❌ Failed CSV</a>
+            </div>
+        </div>
+
+        <label style="margin-top:10px;">Live Logs</label>
+        <div id="logs"></div>
     </div>
 
-    <label style="margin-top: 15px;">Live Logs</label>
-    <div id="logs"></div>
-</div>
+    <div class="bottom-nav">
+        <a href="#" class="nav-item active">🏠 Home</a>
+        <a href="#" class="nav-item" onclick="window.location.reload()">🔄 Refresh</a>
+        <a href="/logout" class="nav-item" style="color:#ef4444;">🚪 Logout</a>
+    </div>
 
 <script>
     function togglePass() {
@@ -489,6 +557,14 @@ HTML_TEMPLATE = """
     }
     function toggleName() {
         document.getElementById('customName').style.display = document.getElementById('nameMode').value === 'custom' ? 'block' : 'none';
+    }
+
+    function copyCode(code) {
+        navigator.clipboard.writeText(code).then(() => {
+            alert("Code Copied: " + code);
+        }).catch(err => {
+            console.error('Failed to copy: ', err);
+        });
     }
 
     async function startBatch() {
@@ -502,8 +578,11 @@ HTML_TEMPLATE = """
         const customName = document.getElementById('customName').value;
         const lang = document.getElementById('lang').value;
 
-        document.getElementById('startBtn').disabled = true;
         document.getElementById('logs').innerHTML = '';
+        document.getElementById('startBtn').style.display = 'none';
+        document.getElementById('stopBtn').style.display = 'block';
+        document.getElementById('otp-container').style.display = 'none';
+        document.getElementById('otp-list').innerHTML = '';
 
         const res = await fetch('/api/start', {
             method: 'POST',
@@ -518,22 +597,32 @@ HTML_TEMPLATE = """
                 lang: lang
             })
         });
-        
-        if (!res.ok) {
-            alert("Error starting batch");
-            document.getElementById('startBtn').disabled = false;
-        }
     }
+
+    async function stopBatch() {
+        if (!confirm("Are you sure you want to stop the process?")) return;
+        await fetch('/api/stop', { method: 'POST' });
+        document.getElementById('stopBtn').style.display = 'none';
+    }
+
+    let isRunning = false;
 
     setInterval(async () => {
         const res = await fetch('/api/status');
         const data = await res.json();
         
+        isRunning = data.is_running;
+
         if (data.is_running) {
-            document.getElementById('status').innerText = `Status: Running (${data.success}/${data.total})`;
+            document.getElementById('status').innerText = `⚙️ Running (${data.success}/${data.total})`;
+            document.getElementById('status').style.background = '#0ea5e9';
+            document.getElementById('startBtn').style.display = 'none';
+            document.getElementById('stopBtn').style.display = 'block';
         } else {
-            document.getElementById('status').innerText = "Status: Idle";
-            document.getElementById('startBtn').disabled = false;
+            document.getElementById('status').innerText = "🟢 Status: Idle";
+            document.getElementById('status').style.background = '#334155';
+            document.getElementById('startBtn').style.display = 'block';
+            document.getElementById('stopBtn').style.display = 'none';
         }
 
         const logsDiv = document.getElementById('logs');
@@ -541,7 +630,25 @@ HTML_TEMPLATE = """
             logsDiv.innerHTML = data.logs.map(l => `<div class="log-line ${l.color}">[${l.time}] ${l.msg}</div>`).join('');
             logsDiv.scrollTop = logsDiv.scrollHeight;
         }
-    }, 2000);
+
+        // Fetch OTPs
+        const otpRes = await fetch('/api/otps');
+        const otps = await otpRes.json();
+        
+        if (otps.length > 0) {
+            document.getElementById('otp-container').style.display = 'block';
+            const otpList = document.getElementById('otp-list');
+            otpList.innerHTML = otps.map(o => `
+                <div class="otp-item">
+                    <div>
+                        <span class="otp-email">${o.email}</span>
+                        <span class="otp-code">${o.code}</span>
+                    </div>
+                    <button class="copy-btn" onclick="copyCode('${o.code}')">Copy</button>
+                </div>
+            `).join('');
+        }
+    }, 3000);
 </script>
 </body>
 </html>
@@ -556,6 +663,11 @@ def login():
         return render_template_string(LOGIN_TEMPLATE, error="Wrong Password")
     return render_template_string(LOGIN_TEMPLATE)
 
+@app.route('/logout')
+def logout():
+    session.pop('logged_in', None)
+    return redirect(url_for('login'))
+
 @app.route('/')
 def home():
     if not session.get('logged_in'): return redirect(url_for('login'))
@@ -566,9 +678,14 @@ def get_status():
     if not session.get('logged_in'): return jsonify({"error": "Unauthorized"}), 401
     return jsonify({"is_running": IS_RUNNING, "success": WEB_STATE["success"], "total": WEB_STATE["total"], "logs": WEB_LOGS})
 
+@app.route('/api/otps')
+def get_otps():
+    if not session.get('logged_in'): return jsonify({"error": "Unauthorized"}), 401
+    return jsonify(WEB_OTPS)
+
 @app.route('/api/start', methods=['POST'])
 def api_start():
-    global IS_RUNNING, WEB_LOGS
+    global IS_RUNNING, WEB_LOGS, WEB_OTPS, CANCEL_FLAG
     if not session.get('logged_in'): return jsonify({"error": "Unauthorized"}), 401
     if IS_RUNNING: return jsonify({"error": "Already running"}), 400
     
@@ -597,10 +714,21 @@ def api_start():
         if len(parts) >= 2: custom_name = (parts[0], " ".join(parts[1:]))
         
     lang = data.get('lang', 'us')
+    
     WEB_LOGS = [] 
+    WEB_OTPS = [] # Reset OTPs
+    CANCEL_FLAG = False
     add_web_log(f"Starting process for {len(email_data_list)} accounts...", "cyan")
     threading.Thread(target=execute_batch, args=(None, email_data_list, password, lang, custom_name, use_proxy, True)).start()
     return jsonify({"status": "started"})
+
+@app.route('/api/stop', methods=['POST'])
+def api_stop():
+    global CANCEL_FLAG
+    if not session.get('logged_in'): return jsonify({"error": "Unauthorized"}), 401
+    CANCEL_FLAG = True
+    add_web_log("🛑 Stop requested by user...", "red")
+    return jsonify({"status": "stopping"})
 
 @app.route('/download/success')
 def download_success():
@@ -615,102 +743,37 @@ def download_failed():
     return "File not found", 404
 
 # ══════════════════════════════════════════════════════════
-# BOT 1 LOGIC (MAIN BOT - CREATOR)
+# TELEGRAM BOT LOGIC (Same as before, keeping it intact)
 # ══════════════════════════════════════════════════════════
 user_states = {}
 
 def get_main_menu_1(chat_id):
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add(KeyboardButton('🚀 Create Account'))
-    if IS_RUNNING:
-        markup.add(KeyboardButton('🛑 Stop Process'))
-    if str(chat_id) == ADMIN_ID:
-        markup.add(KeyboardButton('⚙️ Admin Panel'))
+    if IS_RUNNING: markup.add(KeyboardButton('🛑 Stop Process'))
+    if str(chat_id) == ADMIN_ID: markup.add(KeyboardButton('⚙️ Admin Panel'))
     return markup
 
 @bot1.message_handler(commands=['start'])
 def send_welcome_1(message):
     chat_id = message.chat.id
-    if not is_authorized(chat_id):
-        return bot1.reply_to(message, "⛔ **Access Denied!**\n\nYou are not authorized to use this bot. Please contact the admin to get access.")
-    
-    bot1.reply_to(message, f"Welcome to Main Bot! 🤖\n\n🆔 **Your Telegram ID:** `{chat_id}`\n\nBot ready. Click below to start.", reply_markup=get_main_menu_1(chat_id), parse_mode='Markdown')
+    if not is_authorized(chat_id): return bot1.reply_to(message, "⛔ **Access Denied!**")
+    bot1.reply_to(message, f"Welcome!\n🆔 `{chat_id}`", reply_markup=get_main_menu_1(chat_id), parse_mode='Markdown')
 
 @bot1.message_handler(func=lambda message: message.text == '🛑 Stop Process')
 def stop_process(message):
-    global CANCEL_FLAG, IS_RUNNING
-    if CANCEL_FLAG:
-        return bot1.send_message(message.chat.id, "⚠️ Process is already stopping...")
+    global CANCEL_FLAG
     CANCEL_FLAG = True
-    bot1.send_message(message.chat.id, "🛑 **Stopping process...** Please wait for current task to finish.", reply_markup=ReplyKeyboardRemove())
-
-@bot1.message_handler(commands=['adduser'])
-def add_user(message):
-    if str(message.chat.id) != ADMIN_ID: return
-    try:
-        user_id = message.text.split(' ')[1]
-        save_auth_user(user_id)
-        bot1.reply_to(message, f"✅ User `{user_id}` has been granted access!", parse_mode='Markdown')
-    except IndexError:
-        bot1.reply_to(message, "Usage: `/adduser 123456789`", parse_mode='Markdown')
-
-@bot1.message_handler(commands=['removeuser'])
-def remove_user(message):
-    if str(message.chat.id) != ADMIN_ID: return
-    try:
-        user_id = message.text.split(' ')[1]
-        remove_auth_user(user_id)
-        bot1.reply_to(message, f"✅ User `{user_id}` access revoked!", parse_mode='Markdown')
-    except IndexError:
-        bot1.reply_to(message, "Usage: `/removeuser 123456789`", parse_mode='Markdown')
-
-@bot1.message_handler(commands=['users'])
-def list_users(message):
-    if str(message.chat.id) != ADMIN_ID: return
-    users = load_auth_users()
-    if not users: return bot1.reply_to(message, "No authorized users yet.")
-    msg = "👥 **Authorized Users:**\n" + "\n".join([f"- `{u}`" for u in users])
-    bot1.reply_to(message, msg, parse_mode='Markdown')
-
-@bot1.message_handler(commands=['admin'])
-@bot1.message_handler(func=lambda message: message.text == '⚙️ Admin Panel')
-def admin_panel(message):
-    chat_id = message.chat.id
-    if str(chat_id) != ADMIN_ID: return bot1.reply_to(message, "❌ You are not an admin.")
-        
-    markup = ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add(KeyboardButton('📊 Stats'), KeyboardButton('🔌 Proxy Count'))
-    markup.add(KeyboardButton('🗑 Clear Success CSV'), KeyboardButton('🗑 Clear Failed CSV'))
-    markup.add(KeyboardButton('🔙 Back to Menu'))
-    bot1.send_message(chat_id, "⚙️ **Admin Panel**\nSelect an option:", reply_markup=markup, parse_mode='Markdown')
-
-@bot1.message_handler(func=lambda message: message.text in ['📊 Stats', '🔌 Proxy Count', '🗑 Clear Success CSV', '🗑 Clear Failed CSV', '🔙 Back to Menu'])
-def admin_actions(message):
-    chat_id = message.chat.id
-    if str(chat_id) != ADMIN_ID: return
-    
-    if message.text == '📊 Stats':
-        success, failed = get_csv_stats()
-        bot1.send_message(chat_id, f"📊 **Bot Statistics**\n\n✅ Total Success: {success}\n❌ Total Failed: {failed}", reply_markup=ReplyKeyboardRemove())
-    elif message.text == '🔌 Proxy Count':
-        bot1.send_message(chat_id, f"🔌 Loaded Proxies: {len(load_proxies())}", reply_markup=ReplyKeyboardRemove())
-    elif message.text == '🗑 Clear Success CSV':
-        if os.path.exists(CSV_FILE): os.remove(CSV_FILE)
-        bot1.send_message(chat_id, "✅ Success CSV Cleared!", reply_markup=ReplyKeyboardRemove())
-    elif message.text == '🗑 Clear Failed CSV':
-        if os.path.exists(FAILED_CSV_FILE): os.remove(FAILED_CSV_FILE)
-        bot1.send_message(chat_id, "✅ Failed CSV Cleared!", reply_markup=ReplyKeyboardRemove())
-    elif message.text == '🔙 Back to Menu':
-        bot1.send_message(chat_id, "Back to main menu.", reply_markup=get_main_menu_1(chat_id))
+    bot1.send_message(message.chat.id, "🛑 **Stopping...**", reply_markup=ReplyKeyboardRemove())
 
 @bot1.message_handler(commands=['create'])
 @bot1.message_handler(func=lambda message: message.text == '🚀 Create Account')
 def start_creation(message):
     chat_id = message.chat.id
     if not is_authorized(chat_id): return
-    if IS_RUNNING: return bot1.send_message(chat_id, "⚠️ A process is already running! Please wait.")
+    if IS_RUNNING: return bot1.send_message(chat_id, "⚠️ Process running!")
     user_states[chat_id] = {'step': 'emails'}
-    bot1.send_message(chat_id, "📧 Paste your emails or combos (one per line):", reply_markup=ReplyKeyboardRemove())
+    bot1.send_message(chat_id, "📧 Paste emails:", reply_markup=ReplyKeyboardRemove())
 
 @bot1.message_handler(func=lambda message: True)
 def handle_inputs(message):
@@ -719,26 +782,20 @@ def handle_inputs(message):
     if chat_id not in user_states: return
     state = user_states[chat_id]
 
-    if message.text == '🔙 Cancel':
-        user_states[chat_id] = {}
-        bot1.send_message(chat_id, "❌ Process Cancelled. Back to Main Menu.", reply_markup=get_main_menu_1(chat_id))
-        return
-
     if state['step'] == 'emails':
         raw_lines = [l.strip() for l in message.text.split('\n') if l.strip()]
         email_data_list = []
         for line in raw_lines:
-            # Handles email|pass|token|client_id|extra
             email = line.split('|')[0].strip()
             if '@' in email: email_data_list.append({"email": email, "full_combo": line})
                 
-        if not email_data_list: return bot1.send_message(chat_id, "❌ Invalid format. Send valid emails.")
+        if not email_data_list: return bot1.send_message(chat_id, "❌ Invalid format.")
         state['email_data_list'] = email_data_list
         auto_lang = get_lang_from_email(email_data_list[0]['email'])
         state['auto_lang'] = auto_lang
         state['step'] = 'password_mode'
         msg = f"✅ Got {len(email_data_list)} emails."
-        if auto_lang: msg += f"\n(Auto Language detected: {auto_lang.upper()})"
+        if auto_lang: msg += f"\n(Auto Language: {auto_lang.upper()})"
         
         markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
         markup.add('Fix Password (SOHAVdd)', 'Custom Password')
@@ -750,26 +807,29 @@ def handle_inputs(message):
             tz = datetime.timezone(datetime.timedelta(hours=6))
             state['password'] = f"SOHAV{datetime.datetime.now(tz).day}"
             state['step'] = 'proxy_mode'
-            bot1.send_message(chat_id, f"✅ Fixed Password set to: `{state['password']}`", parse_mode='Markdown', reply_markup=ReplyKeyboardRemove())
+            bot1.send_message(chat_id, f"✅ Fixed Pass: `{state['password']}`", parse_mode='Markdown', reply_markup=ReplyKeyboardRemove())
             show_proxy_menu(chat_id)
         elif 'Custom Password' in message.text:
             state['step'] = 'custom_password'
-            bot1.send_message(chat_id, "✍️ Enter your Custom Password:", reply_markup=telebot.types.ReplyKeyboardRemove())
-        else: bot1.send_message(chat_id, "❌ Please select from the buttons.")
+            bot1.send_message(chat_id, "✍️ Enter Custom Password:", reply_markup=telebot.types.ReplyKeyboardRemove())
+        elif 'Cancel' in message.text:
+            del user_states[chat_id]
+            return bot1.send_message(chat_id, "Cancelled.", reply_markup=get_main_menu_1(chat_id))
+        else: bot1.send_message(chat_id, "❌ Select from buttons.")
 
     elif state['step'] == 'custom_password':
         state['password'] = message.text.strip()
         state['step'] = 'proxy_mode'
-        bot1.send_message(chat_id, f"✅ Custom Password set.", reply_markup=ReplyKeyboardRemove())
+        bot1.send_message(chat_id, f"✅ Custom Pass set.", reply_markup=ReplyKeyboardRemove())
         show_proxy_menu(chat_id)
 
     elif state['step'] == 'proxy_mode':
         choice = message.text
         if 'No Proxy' in choice: state['use_proxy'] = False; next_step = True
         elif 'Use Proxy' in choice:
-            if len(load_proxies()) == 0: return bot1.send_message(chat_id, "⚠️ No proxies found in proxies.txt! Please add some or select No Proxy.")
+            if len(load_proxies()) == 0: return bot1.send_message(chat_id, "⚠️ No proxies found!")
             state['use_proxy'] = True; next_step = True
-        else: next_step = False; bot1.send_message(chat_id, "❌ Please select from the buttons.")
+        else: next_step = False; bot1.send_message(chat_id, "❌ Select from buttons.")
 
         if next_step:
             state['step'] = 'name_mode'
@@ -789,7 +849,7 @@ def handle_inputs(message):
 
     elif state['step'] == 'custom_name':
         parts = message.text.strip().split(' ')
-        if len(parts) < 2: return bot1.send_message(chat_id, "❌ Invalid format. Use: Firstname Lastname")
+        if len(parts) < 2: return bot1.send_message(chat_id, "❌ Invalid format.")
         state['custom_name'] = (parts[0], " ".join(parts[1:]))
         if state.get('auto_lang'): state['lang'] = state['auto_lang']; start_batch_from_state(chat_id, state)
         else: state['step'] = 'language'; show_languages(chat_id)
@@ -811,7 +871,7 @@ def show_languages(chat_id):
     buttons = [KeyboardButton(code) for code in LANG_MAP.keys()]
     markup.add(*buttons)
     markup.add(KeyboardButton('🔙 Cancel'))
-    bot1.send_message(chat_id, "🌍 Select Language Code:", reply_markup=markup)
+    bot1.send_message(chat_id, "🌍 Select Language:", reply_markup=markup)
 
 def start_batch_from_state(chat_id, state):
     global CURRENT_LANG_HEADER
@@ -821,7 +881,7 @@ def start_batch_from_state(chat_id, state):
     
     state['step'] = None
     proxy_status = "Proxy ON" if state['use_proxy'] else "Direct IP"
-    bot1.send_message(chat_id, f"⚙️ Starting creation for {len(state['email_data_list'])} accounts ({proxy_status} | Lang: {lang.upper()})...\n\n👇 *Please wait, results will appear below.*", parse_mode='Markdown', reply_markup=ReplyKeyboardRemove())
+    bot1.send_message(chat_id, f"⚙️ Starting creation for {len(state['email_data_list'])} accounts ({proxy_status} | Lang: {lang.upper()})...\n\n👇 *Please wait...*", parse_mode='Markdown', reply_markup=ReplyKeyboardRemove())
     threading.Thread(target=execute_batch, args=(chat_id, state['email_data_list'], state['password'], lang, state['custom_name'], state['use_proxy'], False)).start()
 
 
@@ -831,17 +891,14 @@ def start_batch_from_state(chat_id, state):
 def get_main_menu_2(chat_id):
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add(KeyboardButton('📁 Download Success'), KeyboardButton('❌ Download Failed'))
-    if str(chat_id) == ADMIN_ID:
-        markup.add(KeyboardButton('📊 Stats'))
+    if str(chat_id) == ADMIN_ID: markup.add(KeyboardButton('📊 Stats'))
     return markup
 
 @bot2.message_handler(commands=['start'])
 def send_welcome_2(message):
     chat_id = message.chat.id
-    if not is_authorized(chat_id):
-        return bot2.reply_to(message, "⛔ **Access Denied!**\n\nYou are not authorized to use this bot. Please contact the admin.")
-    
-    bot2.reply_to(message, "Welcome to Download Bot! 📁\n\nHere you can download your cookies and account combos.", reply_markup=get_main_menu_2(chat_id))
+    if not is_authorized(chat_id): return bot2.reply_to(message, "⛔ **Access Denied!**")
+    bot2.reply_to(message, "Welcome to Download Bot! 📁", reply_markup=get_main_menu_2(chat_id))
 
 @bot2.message_handler(commands=['getcsv'])
 @bot2.message_handler(func=lambda message: message.text == '📁 Download Success')
@@ -850,9 +907,9 @@ def send_csv_2(message):
     if not is_authorized(chat_id): return
     if os.path.exists(CSV_FILE):
         try:
-            with open(CSV_FILE, 'rb') as f: bot2.send_document(chat_id, f, caption="Here is your SUCCESS accounts CSV.")
-        except Exception as e: bot2.send_message(chat_id, f"Error reading file: {e}")
-    else: bot2.send_message(chat_id, "❌ No Success CSV found. Create accounts first!")
+            with open(CSV_FILE, 'rb') as f: bot2.send_document(chat_id, f, caption="Here is your SUCCESS CSV.")
+        except Exception as e: bot2.send_message(chat_id, f"Error: {e}")
+    else: bot2.send_message(chat_id, "❌ No Success CSV found.")
 
 @bot2.message_handler(commands=['getfailed'])
 @bot2.message_handler(func=lambda message: message.text == '❌ Download Failed')
@@ -861,33 +918,22 @@ def send_failed_csv_2(message):
     if not is_authorized(chat_id): return
     if os.path.exists(FAILED_CSV_FILE):
         try:
-            with open(FAILED_CSV_FILE, 'rb') as f: bot2.send_document(chat_id, f, caption="Here is your FAILED accounts CSV.")
-        except Exception as e: bot2.send_message(chat_id, f"Error reading file: {e}")
-    else: bot2.send_message(chat_id, "❌ No Failed CSV found. Everything might be successful!")
-
-@bot2.message_handler(commands=['stats'])
-@bot2.message_handler(func=lambda message: message.text == '📊 Stats')
-def stats_2(message):
-    chat_id = message.chat.id
-    if str(chat_id) != ADMIN_ID: return
-    success, failed = get_csv_stats()
-    bot2.send_message(chat_id, f"📊 **Bot Statistics**\n\n✅ Total Success: {success}\n❌ Total Failed: {failed}")
+            with open(FAILED_CSV_FILE, 'rb') as f: bot2.send_document(chat_id, f, caption="Here is your FAILED CSV.")
+        except Exception as e: bot2.send_message(chat_id, f"Error: {e}")
+    else: bot2.send_message(chat_id, "❌ No Failed CSV found.")
 
 
 # ══════════════════════════════════════════════════════════
 # START FLASK & BOTH BOTS
 # ══════════════════════════════════════════════════════════
 if __name__ == '__main__':
-    # Flask Server Thread
     t1 = threading.Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080))))
     t1.daemon = True
     t1.start()
 
-    # Bot 2 (Downloader) Thread
     t2 = threading.Thread(target=bot2.infinity_polling)
     t2.daemon = True
     t2.start()
 
-    # Bot 1 (Creator) runs in main thread
-    print("Main Bot, Download Bot & Web Dashboard is running...")
+    print("App Server & Bots running...")
     bot1.infinity_polling()
