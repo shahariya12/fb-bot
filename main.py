@@ -1,7 +1,7 @@
 #-----create by siam ---#
 #------TG: @SIAMKHANXD--#
 import telebot
-from telebot.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from telebot.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton
 import json
 import re
 import uuid
@@ -24,7 +24,7 @@ except ImportError:
     exit()
 
 # ══════════════════════════════════════════════════════════
-# BOT SETTINGS (Ekhane 2 ta token boshao)
+# BOT SETTINGS
 # ══════════════════════════════════════════════════════════
 BOT_TOKEN_1 = "9025360567:AAEJ2Jq2FSAVpDOVC3UCPYViQE9-sNI7NSk" # Main Bot (Creator)
 BOT_TOKEN_2 = "9028640496:AAG8y-z28g98sjYfEjLC5yanhhA-YgP9zHQ" # Download Bot (Cookie)
@@ -32,7 +32,7 @@ BOT_TOKEN_2 = "9028640496:AAG8y-z28g98sjYfEjLC5yanhhA-YgP9zHQ" # Download Bot (C
 bot1 = telebot.TeleBot(BOT_TOKEN_1)
 bot2 = telebot.TeleBot(BOT_TOKEN_2)
 
-ADMIN_ID = "6408202140" # <--- Tomar Telegram ID ekhane boshao
+ADMIN_ID = "6408202140" # Tomar Telegram ID
 WEB_PASSWORD = "SOHAV_ADMIN"
 
 # ══════════════════════════════════════════════════════════
@@ -42,6 +42,7 @@ app = Flask('')
 app.secret_key = "SOHAV_SECRET_KEY_123"
 WEB_LOGS = []
 IS_RUNNING = False
+CANCEL_FLAG = False  # Process cancel korar jonno flag
 WEB_STATE = {"total": 0, "success": 0, "current": 0}
 
 def add_web_log(msg, color="white"):
@@ -88,9 +89,9 @@ def is_authorized(chat_id):
 # HOTMAIL OTP AUTO-FETCHER (Silent Mode)
 # ══════════════════════════════════════════════════════════
 def fetch_otp_from_hotmail(email_addr, refresh_token, client_id, chat_id):
-    # Ekhane ager moto "Auto-checking" message ta nei, tai silent e kaj korbe
-    
+    global CANCEL_FLAG
     for attempt in range(2400): 
+        if CANCEL_FLAG: return
         time.sleep(3)
         try:
             token_res = requests.post("https://login.microsoftonline.com/common/oauth2/v2.0/token", data={
@@ -338,13 +339,15 @@ def resend_otp(session, uid, proxy):
     except Exception: return False
 
 def execute_batch(chat_id, email_data_list, password, lang, custom_name, use_proxy, is_web=False):
-    global IS_RUNNING, WEB_STATE
+    global IS_RUNNING, WEB_STATE, CANCEL_FLAG
     IS_RUNNING = True
+    CANCEL_FLAG = False
     success_count = 0; fail_count = 0
     WEB_STATE["total"] = len(email_data_list); WEB_STATE["success"] = 0
     
     def process_one(item, idx, total):
         nonlocal success_count, fail_count
+        if CANCEL_FLAG: return
         WEB_STATE["current"] = idx
         email = item['email']; full_combo = item['full_combo']
         c_fname = custom_name[0] if custom_name else None; c_lname = custom_name[1] if custom_name else None
@@ -360,7 +363,6 @@ def execute_batch(chat_id, email_data_list, password, lang, custom_name, use_pro
             csv_ok = save_to_csv(res['uid'], password, res['cookie'], full_combo)
             csv_status = "✅ Saved to CSV" if csv_ok else "⚠️ CSV Save Failed"
             
-            # SUDHU EMAIL SHOW KORBE
             msg_text = f"✅ **ACCOUNT CREATED!**\n\n📧 Email: `{email}`"
             
             if not is_web and chat_id: bot1.edit_message_text(msg_text, chat_id=chat_id, message_id=status_msg.message_id, parse_mode='Markdown')
@@ -386,10 +388,13 @@ def execute_batch(chat_id, email_data_list, password, lang, custom_name, use_pro
         for future in futures: future.result()
 
     IS_RUNNING = False
-    finish_msg = f"🎉 **Batch Finished!**\n\n✅ Total Success: {success_count}\n❌ Total Failed: {fail_count}\n\n👉 _Type /start to open menu again._"
+    if CANCEL_FLAG:
+        finish_msg = f"🛑 **Batch Cancelled!**\n\n✅ Total Success: {success_count}\n❌ Total Failed: {fail_count}"
+    else:
+        finish_msg = f"🎉 **Batch Finished!**\n\n✅ Total Success: {success_count}\n❌ Total Failed: {fail_count}\n\n👉 _Type /start to open menu again._"
     
     if not is_web and chat_id: 
-        bot1.send_message(chat_id, finish_msg, parse_mode='Markdown', reply_markup=ReplyKeyboardRemove())
+        bot1.send_message(chat_id, finish_msg, parse_mode='Markdown', reply_markup=get_main_menu_1(chat_id))
     else: 
         add_web_log(f"Finished! Success: {success_count}, Failed: {fail_count}", "yellow")
 
@@ -617,6 +622,8 @@ user_states = {}
 def get_main_menu_1(chat_id):
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add(KeyboardButton('🚀 Create Account'))
+    if IS_RUNNING:
+        markup.add(KeyboardButton('🛑 Stop Process'))
     if str(chat_id) == ADMIN_ID:
         markup.add(KeyboardButton('⚙️ Admin Panel'))
     return markup
@@ -628,6 +635,14 @@ def send_welcome_1(message):
         return bot1.reply_to(message, "⛔ **Access Denied!**\n\nYou are not authorized to use this bot. Please contact the admin to get access.")
     
     bot1.reply_to(message, f"Welcome to Main Bot! 🤖\n\n🆔 **Your Telegram ID:** `{chat_id}`\n\nBot ready. Click below to start.", reply_markup=get_main_menu_1(chat_id), parse_mode='Markdown')
+
+@bot1.message_handler(func=lambda message: message.text == '🛑 Stop Process')
+def stop_process(message):
+    global CANCEL_FLAG, IS_RUNNING
+    if CANCEL_FLAG:
+        return bot1.send_message(message.chat.id, "⚠️ Process is already stopping...")
+    CANCEL_FLAG = True
+    bot1.send_message(message.chat.id, "🛑 **Stopping process...** Please wait for current task to finish.", reply_markup=ReplyKeyboardRemove())
 
 @bot1.message_handler(commands=['adduser'])
 def add_user(message):
@@ -713,6 +728,7 @@ def handle_inputs(message):
         raw_lines = [l.strip() for l in message.text.split('\n') if l.strip()]
         email_data_list = []
         for line in raw_lines:
+            # Handles email|pass|token|client_id|extra
             email = line.split('|')[0].strip()
             if '@' in email: email_data_list.append({"email": email, "full_combo": line})
                 
