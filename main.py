@@ -27,12 +27,12 @@ except ImportError:
 # BOT SETTINGS
 # ══════════════════════════════════════════════════════════
 BOT_TOKEN_1 = "9025360567:AAEJ2Jq2FSAVpDOVC3UCPYViQE9-sNI7NSk" # Main Bot (Creator)
-BOT_TOKEN_2 = "YOUR_SECOND_BOT_TOKEN_HERE" # Download Bot
+BOT_TOKEN_2 = "9028640496:AAG8y-z28g98sjYfEjLC5yanhhA-YgP9zHQ" # Download Bot
 
 bot1 = telebot.TeleBot(BOT_TOKEN_1)
 bot2 = telebot.TeleBot(BOT_TOKEN_2)
 
-ADMIN_ID = "1234567890" # <--- Tomar Telegram ID ekhane boshao
+ADMIN_ID = "6408202140" # <--- Tomar Telegram ID ekhane boshao
 WEB_PASSWORD = "SOHAV_ADMIN"
 
 # ══════════════════════════════════════════════════════════
