@@ -24,12 +24,16 @@ except ImportError:
     exit()
 
 # ══════════════════════════════════════════════════════════
-# SETTINGS
+# BOT SETTINGS (Ekhane 2 ta token boshao)
 # ══════════════════════════════════════════════════════════
-BOT_TOKEN = "9025360567:AAEJ2Jq2FSAVpDOVC3UCPYViQE9-sNI7NSk" 
+BOT_TOKEN_1 = "9025360567:AAEJ2Jq2FSAVpDOVC3UCPYViQE9-sNI7NSk" # Main Bot (Creator)
+BOT_TOKEN_2 = "9028640496:AAG8y-z28g98sjYfEjLC5yanhhA-YgP9zHQ" # Download Bot (Cookie)
+
+bot1 = telebot.TeleBot(BOT_TOKEN_1)
+bot2 = telebot.TeleBot(BOT_TOKEN_2)
+
 ADMIN_ID = "6408202140" # <--- Tomar Telegram ID ekhane boshao
 WEB_PASSWORD = "SOHAV_ADMIN"
-bot = telebot.TeleBot(BOT_TOKEN)
 
 # ══════════════════════════════════════════════════════════
 # FLASK WEB SERVER SETUP
@@ -84,12 +88,11 @@ def is_authorized(chat_id):
 # HOTMAIL OTP AUTO-FETCHER (3s Refresh - 60s Limit)
 # ══════════════════════════════════════════════════════════
 def fetch_otp_from_hotmail(email_addr, refresh_token, client_id, chat_id):
-    bot.send_message(chat_id, f"🔄 _Auto-checking Hotmail for `{email_addr}` (Every 3s for 60s)..._", parse_mode='Markdown')
+    bot1.send_message(chat_id, f"🔄 _Auto-checking Hotmail for `{email_addr}` (Every 3s for 60s)..._", parse_mode='Markdown')
     
-    for attempt in range(20): # 20 attempts * 3 seconds = 60 seconds
+    for attempt in range(20): 
         time.sleep(3)
         try:
-            # 1. Get Access Token
             token_res = requests.post("https://login.microsoftonline.com/common/oauth2/v2.0/token", data={
                 "client_id": client_id,
                 "grant_type": "refresh_token",
@@ -100,7 +103,6 @@ def fetch_otp_from_hotmail(email_addr, refresh_token, client_id, chat_id):
             access_token = token_res.json().get("access_token")
             if not access_token: continue
 
-            # 2. Read Inbox (Sorted by Newest)
             msg_res = requests.get(
                 "https://graph.microsoft.com/v1.0/me/messages?$top=10&$orderby=receivedDateTime%20desc&$select=subject,body,receivedDateTime,from",
                 headers={"Authorization": f"Bearer {access_token}"},
@@ -113,19 +115,16 @@ def fetch_otp_from_hotmail(email_addr, refresh_token, client_id, chat_id):
                 subject = msg.get("subject", "")
                 sender = msg.get("from", {}).get("emailAddress", {}).get("address", "")
                 
-                # Check if it's from Facebook
                 if "facebook" in sender.lower() or "facebook" in subject.lower() or "code" in subject.lower():
-                    # Search for 6 digit number or 5 digit number
                     match = re.search(r'\b(\d{6})\b', body) or re.search(r'\b(\d{5})\b', body)
                     if match:
                         code = match.group(1)
-                        bot.send_message(chat_id, f"📩 **OTP FOUND for `{email_addr}`**\n\n🔑 Code: `{code}`\n\n_Copied from Hotmail inbox!_", parse_mode='Markdown')
-                        return # Stop after finding
+                        bot1.send_message(chat_id, f"📩 **OTP FOUND for `{email_addr}`**\n\n🔑 Code: `{code}`\n\n_Copied from Hotmail inbox!_", parse_mode='Markdown')
+                        return 
         except Exception:
             pass
     
-    # If not found after 60 seconds
-    bot.send_message(chat_id, f"⚠️ Could not find OTP for `{email_addr}` in Hotmail inbox (Timeout 60s).", parse_mode='Markdown')
+    bot1.send_message(chat_id, f"⚠️ Could not find OTP for `{email_addr}` in Hotmail inbox (Timeout 60s).", parse_mode='Markdown')
 
 # ══════════════════════════════════════════════════════════
 # DOMAIN TO LANGUAGE MAP
@@ -146,17 +145,17 @@ def get_lang_from_email(email_str):
     return None
 
 # ══════════════════════════════════════════════════════════
-# CSV SAVERS
+# CSV SAVERS (UPDATED: UID, PASSWORD, COOKIE, FULL_MAIL)
 # ══════════════════════════════════════════════════════════
-def save_to_csv(uid, cookie, full_combo):
+def save_to_csv(uid, password, cookie, full_combo):
     try:
         with file_lock:
             file_exists = os.path.isfile(CSV_FILE)
             with open(CSV_FILE, mode='a', newline='', encoding='utf-8-sig') as f:
                 writer = csv.writer(f, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
                 if not file_exists or os.path.getsize(CSV_FILE) == 0:
-                    writer.writerow(['UID', 'COOKIE', 'MAIL_COMBO'])
-                writer.writerow([uid, cookie, full_combo])
+                    writer.writerow(['UID', 'PASSWORD', 'COOKIE', 'FULL_MAIL'])
+                writer.writerow([uid, password, cookie, full_combo])
         return True
     except Exception as e: return False
 
@@ -167,7 +166,7 @@ def save_failed_to_csv(full_combo, reason):
             with open(FAILED_CSV_FILE, mode='a', newline='', encoding='utf-8-sig') as f:
                 writer = csv.writer(f, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
                 if not file_exists or os.path.getsize(FAILED_CSV_FILE) == 0:
-                    writer.writerow(['MAIL_COMBO', 'REASON'])
+                    writer.writerow(['FULL_MAIL', 'REASON'])
                 writer.writerow([full_combo, reason])
         return True
     except Exception as e: return False
@@ -348,26 +347,25 @@ def execute_batch(chat_id, email_data_list, password, lang, custom_name, use_pro
         c_fname = custom_name[0] if custom_name else None; c_lname = custom_name[1] if custom_name else None
         
         status_msg = None
-        if not is_web and chat_id: status_msg = bot.send_message(chat_id, f"⏳ [{idx}/{total}] Processing: `{email}`", parse_mode='Markdown')
+        if not is_web and chat_id: status_msg = bot1.send_message(chat_id, f"⏳ [{idx}/{total}] Processing: `{email}`", parse_mode='Markdown')
         else: add_web_log(f"[{idx}/{total}] Processing: {email}", "cyan")
         
         res, err = fb_create_account(email, password, lang, c_fname, c_lname, use_proxy)
         
         if res:
             success_count += 1; WEB_STATE["success"] = success_count
-            csv_ok = save_to_csv(res['uid'], res['cookie'], full_combo)
+            # Updated function call: Added password argument
+            csv_ok = save_to_csv(res['uid'], password, res['cookie'], full_combo)
             csv_status = "✅ Saved to CSV" if csv_ok else "⚠️ CSV Save Failed"
             
-            # Ekhane Email Combo bad diye sudhu 'Email' dekhano hoyeche
-            msg_text = f"✅ **ACCOUNT CREATED!**\n\n📧 Email: `{email}`\n👤 Name: `{res['firstname']} {res['lastname']}`\n🆔 UID: `{res['uid']}`\n🔑 FB Password: `{password}`\n\n🍪 Cookie: `{res['cookie']}`\n\n{csv_status}"
+            # Main bot e cookie dekhacche na
+            msg_text = f"✅ **ACCOUNT CREATED!**\n\n📧 Email: `{email}`\n👤 Name: `{res['firstname']} {res['lastname']}`\n🆔 UID: `{res['uid']}`\n🔑 Password: `{password}`\n\n{csv_status}"
             
-            if not is_web and chat_id: bot.edit_message_text(msg_text, chat_id=chat_id, message_id=status_msg.message_id, parse_mode='Markdown')
+            if not is_web and chat_id: bot1.edit_message_text(msg_text, chat_id=chat_id, message_id=status_msg.message_id, parse_mode='Markdown')
             else: add_web_log(f"[+] SUCCESS: {email} | UID: {res['uid']}", "green")
             
-            # Resend OTP to make sure code arrives
             resend_otp(res['session'], res['uid'], res['proxy'])
             
-            # Trigger OTP Auto-Fetcher
             combo_parts = full_combo.split('|')
             if len(combo_parts) >= 4:
                 refresh_token = combo_parts[2].strip()
@@ -378,7 +376,7 @@ def execute_batch(chat_id, email_data_list, password, lang, custom_name, use_pro
             fail_count += 1
             save_failed_to_csv(full_combo, err)
             fail_text = f"❌ `{email}` Failed: {err}"
-            if not is_web and chat_id: bot.edit_message_text(fail_text, chat_id=chat_id, message_id=status_msg.message_id, parse_mode='Markdown')
+            if not is_web and chat_id: bot1.edit_message_text(fail_text, chat_id=chat_id, message_id=status_msg.message_id, parse_mode='Markdown')
             else: add_web_log(fail_text, "red")
 
     with ThreadPoolExecutor(max_workers=len(email_data_list)) as executor:
@@ -389,7 +387,7 @@ def execute_batch(chat_id, email_data_list, password, lang, custom_name, use_pro
     finish_msg = f"🎉 **Batch Finished!**\n\n✅ Total Success: {success_count}\n❌ Total Failed: {fail_count}\n\n👉 _Type /start to open menu again._"
     
     if not is_web and chat_id: 
-        bot.send_message(chat_id, finish_msg, parse_mode='Markdown', reply_markup=ReplyKeyboardRemove())
+        bot1.send_message(chat_id, finish_msg, parse_mode='Markdown', reply_markup=ReplyKeyboardRemove())
     else: 
         add_web_log(f"Finished! Success: {success_count}, Failed: {fail_count}", "yellow")
 
@@ -610,117 +608,94 @@ def download_failed():
     return "File not found", 404
 
 # ══════════════════════════════════════════════════════════
-# TELEGRAM BOT LOGIC
+# BOT 1 LOGIC (MAIN BOT - CREATOR)
 # ══════════════════════════════════════════════════════════
 user_states = {}
 
-def get_main_menu(chat_id):
+def get_main_menu_1(chat_id):
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add(KeyboardButton('🚀 Create Account'))
-    markup.add(KeyboardButton('📁 Download Success'), KeyboardButton('❌ Download Failed'))
     if str(chat_id) == ADMIN_ID:
         markup.add(KeyboardButton('⚙️ Admin Panel'))
     return markup
 
-@bot.message_handler(commands=['start'])
-def send_welcome(message):
+@bot1.message_handler(commands=['start'])
+def send_welcome_1(message):
     chat_id = message.chat.id
     if not is_authorized(chat_id):
-        return bot.reply_to(message, "⛔ **Access Denied!**\n\nYou are not authorized to use this bot. Please contact the admin to get access.")
+        return bot1.reply_to(message, "⛔ **Access Denied!**\n\nYou are not authorized to use this bot. Please contact the admin to get access.")
     
-    bot.reply_to(message, f"Welcome to FB Auto Creator Bot! 🤖\n\n🆔 **Your Telegram ID:** `{chat_id}`\n\nBot ready. Click below to start.", reply_markup=get_main_menu(chat_id), parse_mode='Markdown')
+    bot1.reply_to(message, f"Welcome to Main Bot! 🤖\n\n🆔 **Your Telegram ID:** `{chat_id}`\n\nBot ready. Click below to start.", reply_markup=get_main_menu_1(chat_id), parse_mode='Markdown')
 
-@bot.message_handler(commands=['adduser'])
+@bot1.message_handler(commands=['adduser'])
 def add_user(message):
     if str(message.chat.id) != ADMIN_ID: return
     try:
         user_id = message.text.split(' ')[1]
         save_auth_user(user_id)
-        bot.reply_to(message, f"✅ User `{user_id}` has been granted access!", parse_mode='Markdown')
+        bot1.reply_to(message, f"✅ User `{user_id}` has been granted access!", parse_mode='Markdown')
     except IndexError:
-        bot.reply_to(message, "Usage: `/adduser 123456789`", parse_mode='Markdown')
+        bot1.reply_to(message, "Usage: `/adduser 123456789`", parse_mode='Markdown')
 
-@bot.message_handler(commands=['removeuser'])
+@bot1.message_handler(commands=['removeuser'])
 def remove_user(message):
     if str(message.chat.id) != ADMIN_ID: return
     try:
         user_id = message.text.split(' ')[1]
         remove_auth_user(user_id)
-        bot.reply_to(message, f"✅ User `{user_id}` access revoked!", parse_mode='Markdown')
+        bot1.reply_to(message, f"✅ User `{user_id}` access revoked!", parse_mode='Markdown')
     except IndexError:
-        bot.reply_to(message, "Usage: `/removeuser 123456789`", parse_mode='Markdown')
+        bot1.reply_to(message, "Usage: `/removeuser 123456789`", parse_mode='Markdown')
 
-@bot.message_handler(commands=['users'])
+@bot1.message_handler(commands=['users'])
 def list_users(message):
     if str(message.chat.id) != ADMIN_ID: return
     users = load_auth_users()
-    if not users: return bot.reply_to(message, "No authorized users yet.")
+    if not users: return bot1.reply_to(message, "No authorized users yet.")
     msg = "👥 **Authorized Users:**\n" + "\n".join([f"- `{u}`" for u in users])
-    bot.reply_to(message, msg, parse_mode='Markdown')
+    bot1.reply_to(message, msg, parse_mode='Markdown')
 
-@bot.message_handler(commands=['admin'])
-@bot.message_handler(func=lambda message: message.text == '⚙️ Admin Panel')
+@bot1.message_handler(commands=['admin'])
+@bot1.message_handler(func=lambda message: message.text == '⚙️ Admin Panel')
 def admin_panel(message):
     chat_id = message.chat.id
-    if str(chat_id) != ADMIN_ID: return bot.reply_to(message, "❌ You are not an admin.")
+    if str(chat_id) != ADMIN_ID: return bot1.reply_to(message, "❌ You are not an admin.")
         
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add(KeyboardButton('📊 Stats'), KeyboardButton('🔌 Proxy Count'))
     markup.add(KeyboardButton('🗑 Clear Success CSV'), KeyboardButton('🗑 Clear Failed CSV'))
     markup.add(KeyboardButton('🔙 Back to Menu'))
-    bot.send_message(chat_id, "⚙️ **Admin Panel**\nSelect an option:", reply_markup=markup, parse_mode='Markdown')
+    bot1.send_message(chat_id, "⚙️ **Admin Panel**\nSelect an option:", reply_markup=markup, parse_mode='Markdown')
 
-@bot.message_handler(func=lambda message: message.text in ['📊 Stats', '🔌 Proxy Count', '🗑 Clear Success CSV', '🗑 Clear Failed CSV', '🔙 Back to Menu'])
+@bot1.message_handler(func=lambda message: message.text in ['📊 Stats', '🔌 Proxy Count', '🗑 Clear Success CSV', '🗑 Clear Failed CSV', '🔙 Back to Menu'])
 def admin_actions(message):
     chat_id = message.chat.id
     if str(chat_id) != ADMIN_ID: return
     
     if message.text == '📊 Stats':
         success, failed = get_csv_stats()
-        bot.send_message(chat_id, f"📊 **Bot Statistics**\n\n✅ Total Success: {success}\n❌ Total Failed: {failed}", reply_markup=ReplyKeyboardRemove())
+        bot1.send_message(chat_id, f"📊 **Bot Statistics**\n\n✅ Total Success: {success}\n❌ Total Failed: {failed}", reply_markup=ReplyKeyboardRemove())
     elif message.text == '🔌 Proxy Count':
-        bot.send_message(chat_id, f"🔌 Loaded Proxies: {len(load_proxies())}", reply_markup=ReplyKeyboardRemove())
+        bot1.send_message(chat_id, f"🔌 Loaded Proxies: {len(load_proxies())}", reply_markup=ReplyKeyboardRemove())
     elif message.text == '🗑 Clear Success CSV':
         if os.path.exists(CSV_FILE): os.remove(CSV_FILE)
-        bot.send_message(chat_id, "✅ Success CSV Cleared!", reply_markup=ReplyKeyboardRemove())
+        bot1.send_message(chat_id, "✅ Success CSV Cleared!", reply_markup=ReplyKeyboardRemove())
     elif message.text == '🗑 Clear Failed CSV':
         if os.path.exists(FAILED_CSV_FILE): os.remove(FAILED_CSV_FILE)
-        bot.send_message(chat_id, "✅ Failed CSV Cleared!", reply_markup=ReplyKeyboardRemove())
+        bot1.send_message(chat_id, "✅ Failed CSV Cleared!", reply_markup=ReplyKeyboardRemove())
     elif message.text == '🔙 Back to Menu':
-        bot.send_message(chat_id, "Back to main menu.", reply_markup=get_main_menu(chat_id))
+        bot1.send_message(chat_id, "Back to main menu.", reply_markup=get_main_menu_1(chat_id))
 
-@bot.message_handler(commands=['getcsv'])
-@bot.message_handler(func=lambda message: message.text == '📁 Download Success')
-def send_csv(message):
-    chat_id = message.chat.id
-    if not is_authorized(chat_id): return
-    if os.path.exists(CSV_FILE):
-        try:
-            with open(CSV_FILE, 'rb') as f: bot.send_document(chat_id, f, caption="Here is your SUCCESS accounts CSV.")
-        except Exception as e: bot.send_message(chat_id, f"Error reading file: {e}")
-    else: bot.send_message(chat_id, "❌ No Success CSV found. Create accounts first!")
-
-@bot.message_handler(commands=['getfailed'])
-@bot.message_handler(func=lambda message: message.text == '❌ Download Failed')
-def send_failed_csv(message):
-    chat_id = message.chat.id
-    if not is_authorized(chat_id): return
-    if os.path.exists(FAILED_CSV_FILE):
-        try:
-            with open(FAILED_CSV_FILE, 'rb') as f: bot.send_document(chat_id, f, caption="Here is your FAILED accounts CSV.")
-        except Exception as e: bot.send_message(chat_id, f"Error reading file: {e}")
-    else: bot.send_message(chat_id, "❌ No Failed CSV found. Everything might be successful!")
-
-@bot.message_handler(commands=['create'])
-@bot.message_handler(func=lambda message: message.text == '🚀 Create Account')
+@bot1.message_handler(commands=['create'])
+@bot1.message_handler(func=lambda message: message.text == '🚀 Create Account')
 def start_creation(message):
     chat_id = message.chat.id
     if not is_authorized(chat_id): return
-    if IS_RUNNING: return bot.send_message(chat_id, "⚠️ A process is already running! Please wait.")
+    if IS_RUNNING: return bot1.send_message(chat_id, "⚠️ A process is already running! Please wait.")
     user_states[chat_id] = {'step': 'emails'}
-    bot.send_message(chat_id, "📧 Paste your emails or combos (one per line):", reply_markup=ReplyKeyboardRemove())
+    bot1.send_message(chat_id, "📧 Paste your emails or combos (one per line):", reply_markup=ReplyKeyboardRemove())
 
-@bot.message_handler(func=lambda message: True)
+@bot1.message_handler(func=lambda message: True)
 def handle_inputs(message):
     chat_id = message.chat.id
     if not is_authorized(chat_id): return
@@ -729,7 +704,7 @@ def handle_inputs(message):
 
     if message.text == '🔙 Cancel':
         user_states[chat_id] = {}
-        bot.send_message(chat_id, "❌ Process Cancelled. Back to Main Menu.", reply_markup=get_main_menu(chat_id))
+        bot1.send_message(chat_id, "❌ Process Cancelled. Back to Main Menu.", reply_markup=get_main_menu_1(chat_id))
         return
 
     if state['step'] == 'emails':
@@ -739,7 +714,7 @@ def handle_inputs(message):
             email = line.split('|')[0].strip()
             if '@' in email: email_data_list.append({"email": email, "full_combo": line})
                 
-        if not email_data_list: return bot.send_message(chat_id, "❌ Invalid format. Send valid emails.")
+        if not email_data_list: return bot1.send_message(chat_id, "❌ Invalid format. Send valid emails.")
         state['email_data_list'] = email_data_list
         auto_lang = get_lang_from_email(email_data_list[0]['email'])
         state['auto_lang'] = auto_lang
@@ -750,45 +725,45 @@ def handle_inputs(message):
         markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
         markup.add('Fix Password (SOHAVdd)', 'Custom Password')
         markup.add('🔙 Cancel')
-        bot.send_message(chat_id, msg + "\n🔐 Select Password Mode:", reply_markup=markup)
+        bot1.send_message(chat_id, msg + "\n🔐 Select Password Mode:", reply_markup=markup)
 
     elif state['step'] == 'password_mode':
         if 'Fix Password' in message.text:
             tz = datetime.timezone(datetime.timedelta(hours=6))
             state['password'] = f"SOHAV{datetime.datetime.now(tz).day}"
             state['step'] = 'proxy_mode'
-            bot.send_message(chat_id, f"✅ Fixed Password set to: `{state['password']}`", parse_mode='Markdown', reply_markup=ReplyKeyboardRemove())
+            bot1.send_message(chat_id, f"✅ Fixed Password set to: `{state['password']}`", parse_mode='Markdown', reply_markup=ReplyKeyboardRemove())
             show_proxy_menu(chat_id)
         elif 'Custom Password' in message.text:
             state['step'] = 'custom_password'
-            bot.send_message(chat_id, "✍️ Enter your Custom Password:", reply_markup=telebot.types.ReplyKeyboardRemove())
-        else: bot.send_message(chat_id, "❌ Please select from the buttons.")
+            bot1.send_message(chat_id, "✍️ Enter your Custom Password:", reply_markup=telebot.types.ReplyKeyboardRemove())
+        else: bot1.send_message(chat_id, "❌ Please select from the buttons.")
 
     elif state['step'] == 'custom_password':
         state['password'] = message.text.strip()
         state['step'] = 'proxy_mode'
-        bot.send_message(chat_id, f"✅ Custom Password set.", reply_markup=ReplyKeyboardRemove())
+        bot1.send_message(chat_id, f"✅ Custom Password set.", reply_markup=ReplyKeyboardRemove())
         show_proxy_menu(chat_id)
 
     elif state['step'] == 'proxy_mode':
         choice = message.text
         if 'No Proxy' in choice: state['use_proxy'] = False; next_step = True
         elif 'Use Proxy' in choice:
-            if len(load_proxies()) == 0: return bot.send_message(chat_id, "⚠️ No proxies found in proxies.txt! Please add some or select No Proxy.")
+            if len(load_proxies()) == 0: return bot1.send_message(chat_id, "⚠️ No proxies found in proxies.txt! Please add some or select No Proxy.")
             state['use_proxy'] = True; next_step = True
-        else: next_step = False; bot.send_message(chat_id, "❌ Please select from the buttons.")
+        else: next_step = False; bot1.send_message(chat_id, "❌ Please select from the buttons.")
 
         if next_step:
             state['step'] = 'name_mode'
             markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
             markup.add('Auto Name', 'Custom Name')
             markup.add('🔙 Cancel')
-            bot.send_message(chat_id, "👤 Select Name Mode:", reply_markup=markup)
+            bot1.send_message(chat_id, "👤 Select Name Mode:", reply_markup=markup)
 
     elif state['step'] == 'name_mode':
         if message.text == 'Custom Name':
             state['step'] = 'custom_name'
-            bot.send_message(chat_id, "✍️ Send: Firstname Lastname", reply_markup=ReplyKeyboardRemove())
+            bot1.send_message(chat_id, "✍️ Send: Firstname Lastname", reply_markup=ReplyKeyboardRemove())
         else:
             state['custom_name'] = None
             if state.get('auto_lang'): state['lang'] = state['auto_lang']; start_batch_from_state(chat_id, state)
@@ -796,7 +771,7 @@ def handle_inputs(message):
 
     elif state['step'] == 'custom_name':
         parts = message.text.strip().split(' ')
-        if len(parts) < 2: return bot.send_message(chat_id, "❌ Invalid format. Use: Firstname Lastname")
+        if len(parts) < 2: return bot1.send_message(chat_id, "❌ Invalid format. Use: Firstname Lastname")
         state['custom_name'] = (parts[0], " ".join(parts[1:]))
         if state.get('auto_lang'): state['lang'] = state['auto_lang']; start_batch_from_state(chat_id, state)
         else: state['step'] = 'language'; show_languages(chat_id)
@@ -811,14 +786,14 @@ def show_proxy_menu(chat_id):
     markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
     markup.add('No Proxy (Direct)', proxy_text)
     markup.add('🔙 Cancel')
-    bot.send_message(chat_id, "🌐 Select Proxy Mode:", reply_markup=markup)
+    bot1.send_message(chat_id, "🌐 Select Proxy Mode:", reply_markup=markup)
 
 def show_languages(chat_id):
     markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True, row_width=4)
     buttons = [KeyboardButton(code) for code in LANG_MAP.keys()]
     markup.add(*buttons)
     markup.add(KeyboardButton('🔙 Cancel'))
-    bot.send_message(chat_id, "🌍 Select Language Code:", reply_markup=markup)
+    bot1.send_message(chat_id, "🌍 Select Language Code:", reply_markup=markup)
 
 def start_batch_from_state(chat_id, state):
     global CURRENT_LANG_HEADER
@@ -828,16 +803,73 @@ def start_batch_from_state(chat_id, state):
     
     state['step'] = None
     proxy_status = "Proxy ON" if state['use_proxy'] else "Direct IP"
-    bot.send_message(chat_id, f"⚙️ Starting creation for {len(state['email_data_list'])} accounts ({proxy_status} | Lang: {lang.upper()})...\n\n👇 *Please wait, results will appear below.*", parse_mode='Markdown', reply_markup=ReplyKeyboardRemove())
+    bot1.send_message(chat_id, f"⚙️ Starting creation for {len(state['email_data_list'])} accounts ({proxy_status} | Lang: {lang.upper()})...\n\n👇 *Please wait, results will appear below.*", parse_mode='Markdown', reply_markup=ReplyKeyboardRemove())
     threading.Thread(target=execute_batch, args=(chat_id, state['email_data_list'], state['password'], lang, state['custom_name'], state['use_proxy'], False)).start()
 
+
 # ══════════════════════════════════════════════════════════
-# START BOTH FLASK & BOT
+# BOT 2 LOGIC (DOWNLOAD BOT - COOKIE)
+# ══════════════════════════════════════════════════════════
+def get_main_menu_2(chat_id):
+    markup = ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add(KeyboardButton('📁 Download Success'), KeyboardButton('❌ Download Failed'))
+    if str(chat_id) == ADMIN_ID:
+        markup.add(KeyboardButton('📊 Stats'))
+    return markup
+
+@bot2.message_handler(commands=['start'])
+def send_welcome_2(message):
+    chat_id = message.chat.id
+    if not is_authorized(chat_id):
+        return bot2.reply_to(message, "⛔ **Access Denied!**\n\nYou are not authorized to use this bot. Please contact the admin.")
+    
+    bot2.reply_to(message, "Welcome to Download Bot! 📁\n\nHere you can download your cookies and account combos.", reply_markup=get_main_menu_2(chat_id))
+
+@bot2.message_handler(commands=['getcsv'])
+@bot2.message_handler(func=lambda message: message.text == '📁 Download Success')
+def send_csv_2(message):
+    chat_id = message.chat.id
+    if not is_authorized(chat_id): return
+    if os.path.exists(CSV_FILE):
+        try:
+            with open(CSV_FILE, 'rb') as f: bot2.send_document(chat_id, f, caption="Here is your SUCCESS accounts CSV.")
+        except Exception as e: bot2.send_message(chat_id, f"Error reading file: {e}")
+    else: bot2.send_message(chat_id, "❌ No Success CSV found. Create accounts first!")
+
+@bot2.message_handler(commands=['getfailed'])
+@bot2.message_handler(func=lambda message: message.text == '❌ Download Failed')
+def send_failed_csv_2(message):
+    chat_id = message.chat.id
+    if not is_authorized(chat_id): return
+    if os.path.exists(FAILED_CSV_FILE):
+        try:
+            with open(FAILED_CSV_FILE, 'rb') as f: bot2.send_document(chat_id, f, caption="Here is your FAILED accounts CSV.")
+        except Exception as e: bot2.send_message(chat_id, f"Error reading file: {e}")
+    else: bot2.send_message(chat_id, "❌ No Failed CSV found. Everything might be successful!")
+
+@bot2.message_handler(commands=['stats'])
+@bot2.message_handler(func=lambda message: message.text == '📊 Stats')
+def stats_2(message):
+    chat_id = message.chat.id
+    if str(chat_id) != ADMIN_ID: return
+    success, failed = get_csv_stats()
+    bot2.send_message(chat_id, f"📊 **Bot Statistics**\n\n✅ Total Success: {success}\n❌ Total Failed: {failed}")
+
+
+# ══════════════════════════════════════════════════════════
+# START FLASK & BOTH BOTS
 # ══════════════════════════════════════════════════════════
 if __name__ == '__main__':
-    t = threading.Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080))))
-    t.daemon = True
-    t.start()
-    
-    print("Bot & Web Dashboard is running...")
-    bot.infinity_polling()
+    # Flask Server Thread
+    t1 = threading.Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080))))
+    t1.daemon = True
+    t1.start()
+
+    # Bot 2 (Downloader) Thread
+    t2 = threading.Thread(target=bot2.infinity_polling)
+    t2.daemon = True
+    t2.start()
+
+    # Bot 1 (Creator) runs in main thread
+    print("Main Bot, Download Bot & Web Dashboard is running...")
+    bot1.infinity_polling()
