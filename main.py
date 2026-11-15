@@ -1,7 +1,7 @@
 #-----create by siam ---#
 #------TG: @SIAMKHANXD--#
 import telebot
-from telebot.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton
+from telebot.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 import json
 import re
 import uuid
@@ -24,10 +24,10 @@ except ImportError:
     exit()
 
 # ══════════════════════════════════════════════════════════
-# BOT SETTINGS
+# BOT SETTINGS (Ekhane 2 ta token boshao)
 # ══════════════════════════════════════════════════════════
 BOT_TOKEN_1 = "9025360567:AAEJ2Jq2FSAVpDOVC3UCPYViQE9-sNI7NSk" # Main Bot (Creator)
-BOT_TOKEN_2 = "9028640496:AAG8y-z28g98sjYfEjLC5yanhhA-YgP9zHQ" # Download Bot
+BOT_TOKEN_2 = "9028640496:AAG8y-z28g98sjYfEjLC5yanhhA-YgP9zHQ" # Download Bot (Cookie)
 
 bot1 = telebot.TeleBot(BOT_TOKEN_1)
 bot2 = telebot.TeleBot(BOT_TOKEN_2)
@@ -36,7 +36,7 @@ ADMIN_ID = "6408202140" # <--- Tomar Telegram ID ekhane boshao
 WEB_PASSWORD = "SOHAV_ADMIN"
 
 # ══════════════════════════════════════════════════════════
-# FLASK WEB SERVER
+# FLASK WEB SERVER SETUP
 # ══════════════════════════════════════════════════════════
 app = Flask('')
 app.secret_key = "SOHAV_SECRET_KEY_123"
@@ -85,91 +85,49 @@ def is_authorized(chat_id):
     return str(chat_id) in load_auth_users()
 
 # ══════════════════════════════════════════════════════════
-# HOTMAIL OTP FETCHER (2 Hours & 5 Digits Only)
+# HOTMAIL OTP AUTO-FETCHER (Silent Mode)
 # ══════════════════════════════════════════════════════════
-def fetch_otp_from_hotmail(email_addr, refresh_token, client_id, chat_id, is_refresh=False):
-    if is_refresh:
-        bot1.send_message(chat_id, f"🔄 _Refreshing inbox for new 5-digit code..._", parse_mode='Markdown')
-
-    # 2400 attempts * 3s = 7200s = 2 Hours
+def fetch_otp_from_hotmail(email_addr, refresh_token, client_id, chat_id):
+    # Ekhane ager moto "Auto-checking" message ta nei, tai silent e kaj korbe
+    
     for attempt in range(2400): 
         time.sleep(3)
         try:
-            # 1. Get Access Token
             token_res = requests.post("https://login.microsoftonline.com/common/oauth2/v2.0/token", data={
                 "client_id": client_id,
                 "grant_type": "refresh_token",
                 "refresh_token": refresh_token,
                 "scope": "https://graph.microsoft.com/.default offline_access"
-            }, timeout=15)
+            }, timeout=10)
             
-            token_data = token_res.json()
-            access_token = token_data.get("access_token")
-            
-            if not access_token:
-                err_desc = token_data.get("error_description", "Invalid Refresh Token or Client ID")
-                if not is_refresh:
-                    bot1.send_message(chat_id, f"❌ **Token Error for `{email_addr}`**\n\n`{err_desc[:100]}`", parse_mode='Markdown')
-                return
+            access_token = token_res.json().get("access_token")
+            if not access_token: continue
 
-            # 2. Read Inbox (Top 5)
             msg_res = requests.get(
-                "https://graph.microsoft.com/v1.0/me/messages?$top=5&$orderby=receivedDateTime%20desc&$select=subject,body,receivedDateTime,from",
+                "https://graph.microsoft.com/v1.0/me/messages?$top=10&$orderby=receivedDateTime%20desc&$select=subject,body,receivedDateTime,from",
                 headers={"Authorization": f"Bearer {access_token}"},
-                timeout=15
+                timeout=10
             )
             
             messages = msg_res.json().get("value", [])
-            if not messages: continue
-            
             for msg in messages:
                 body = msg.get("body", {}).get("content", "")
                 subject = msg.get("subject", "")
                 sender = msg.get("from", {}).get("emailAddress", {}).get("address", "")
                 
-                if "facebook" in sender.lower() or "facebook" in subject.lower() or "code" in subject.lower() or "security" in subject.lower():
-                    # HTML tags remove
+                if "facebook" in sender.lower() or "facebook" in subject.lower() or "code" in subject.lower():
                     clean_body = re.sub(r'<[^>]+>', ' ', body)
-                    
-                    # Khuje ber koro sudhu matro 5 digit er code
                     match = re.search(r'\b(\d{5})\b', clean_body)
+                    if not match: match = re.search(r'\b(\d{6})\b', clean_body)
 
                     if match:
                         code = match.group(1)
-                        
-                        markup = InlineKeyboardMarkup()
-                        btn = InlineKeyboardButton("🔄 Refresh Code", callback_data=f"refresh_otp|{email_addr}|{refresh_token}|{client_id}")
-                        markup.add(btn)
-                        
-                        bot1.send_message(
-                            chat_id, 
-                            f"📩 **OTP FOUND for `{email_addr}`**\n\n🔑 Code: `{code}`\n\n_Copied from Hotmail inbox!_", 
-                            parse_mode='Markdown',
-                            reply_markup=markup
-                        )
+                        bot1.send_message(chat_id, f"📩 **OTP FOUND for `{email_addr}`**\n\n🔑 Code: `{code}`\n\n_Copied from Hotmail inbox!_", parse_mode='Markdown')
                         return 
-        except Exception as e:
+        except Exception:
             pass
     
-    if not is_refresh:
-        bot1.send_message(chat_id, f"⚠️ Could not find OTP for `{email_addr}` in Hotmail inbox (Timeout 2 Hours).", parse_mode='Markdown')
-
-@bot1.callback_query_handler(func=lambda call: call.data.startswith('refresh_otp'))
-def handle_refresh_otp(call):
-    try:
-        _, email, r_token, c_id = call.data.split('|')
-        bot1.answer_callback_query(call.id, "Checking for new code...")
-        
-        bot1.edit_message_text(
-            f"🔄 Refreshing code for `{email}`...",
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
-            parse_mode='Markdown'
-        )
-        
-        threading.Thread(target=fetch_otp_from_hotmail, args=(email, r_token, c_id, call.message.chat.id, True)).start()
-    except Exception as e:
-        bot1.answer_callback_query(call.id, "Error refreshing!")
+    bot1.send_message(chat_id, f"⚠️ Could not find OTP for `{email_addr}` in Hotmail inbox (Timeout).", parse_mode='Markdown')
 
 # ══════════════════════════════════════════════════════════
 # DOMAIN TO LANGUAGE MAP
@@ -415,10 +373,7 @@ def execute_batch(chat_id, email_data_list, password, lang, custom_name, use_pro
                 refresh_token = combo_parts[2].strip()
                 client_id = combo_parts[3].strip()
                 if not is_web and chat_id:
-                    threading.Thread(target=fetch_otp_from_hotmail, args=(email, refresh_token, client_id, chat_id, False)).start()
-            else:
-                if not is_web and chat_id:
-                    bot1.send_message(chat_id, f"⚠️ Cannot auto-fetch OTP for `{email}`. Missing refresh_token or client_id in combo.", parse_mode='Markdown')
+                    threading.Thread(target=fetch_otp_from_hotmail, args=(email, refresh_token, client_id, chat_id)).start()
         else:
             fail_count += 1
             save_failed_to_csv(full_combo, err)
