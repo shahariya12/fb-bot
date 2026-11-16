@@ -54,6 +54,7 @@ CURRENT_BATCH_NUMBER = None
 WEB_LOGS = []
 WEB_STATE = {"total": 0, "success": 0, "current": 0, "batch_number": None}
 
+PROXY_COUNTRY = "fr"
 CHECKPOINT_RETRY_POOL = {}
 LAST_BATCH_CONFIG = {}
 
@@ -70,6 +71,25 @@ def load_proxies():
     except Exception as e:
         print(f"Proxy Load Error: {e}")
         return []
+
+def parse_proxy(proxy_str):
+    try:
+        p = proxy_str.split(':')
+        if len(p) == 4:
+            ip, port, user, pwd = p
+            if PROXY_COUNTRY and '_cr.' in user:
+                user = re.sub(r'_cr\.[a-zA-Z]+', f'_cr.{PROXY_COUNTRY}', user)
+            return {'http': f'http://{user}:{pwd}@{ip}:{port}', 'https': f'http://{user}:{pwd}@{ip}:{port}'}
+        elif len(p) == 3:
+            ip, port, user = p
+            if PROXY_COUNTRY and '_cr.' in user:
+                user = re.sub(r'_cr\.[a-zA-Z]+', f'_cr.{PROXY_COUNTRY}', user)
+            return {'http': f'http://{user}@{ip}:{port}', 'https': f'http://{user}@{ip}:{port}'}
+        elif len(p) == 2:
+            return {'http': f'http://{p[0]}:{p[1]}', 'https': f'http://{p[0]}:{p[1]}'}
+    except:
+        pass
+    return None
 
 def get_next_batch_number():
     max_b = 0
@@ -160,7 +180,7 @@ def get_code_via_api(combo, code_type="facebook"):
             "email": parts[0].strip(),
             "refresh_token": parts[2].strip(),
             "client_id": parts[3].strip(),
-            "type": code_type  # forced to facebook in auto fetch
+            "type": code_type
         }
         headers = {"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"}
         res = requests.post("https://tools.dongvanfb.net/api/get_code_oauth2", json=payload, headers=headers, timeout=10)
@@ -181,7 +201,6 @@ def fetch_otp_from_hotmail(email_addr, full_combo, chat_id=None):
     while time.time() < deadline:
         if CANCEL_EVENT.wait(timeout=5):
             return
-        # code_type="facebook" strictly
         code, error = get_code_via_api(full_combo, code_type="facebook")
         if code:
             try:
@@ -363,15 +382,7 @@ def execute_batch(chat_id, email_data_list, password, lang, custom_name, hotmail
             return
         random.shuffle(proxies)
         for i in range(len(email_data_list)):
-            p = proxies[i % len(proxies)].split(':')
-            if len(p) == 4:
-                proxy_dicts.append({'http': f'http://{p[2]}:{p[3]}@{p[0]}:{p[1]}', 'https': f'http://{p[2]}:{p[3]}@{p[0]}:{p[1]}'})
-            elif len(p) == 3:
-                proxy_dicts.append({'http': f'http://{p[2]}@{p[0]}:{p[1]}', 'https': f'http://{p[2]}@{p[0]}:{p[1]}'})
-            elif len(p) == 2:
-                proxy_dicts.append({'http': f'http://{p[0]}:{p[1]}', 'https': f'http://{p[0]}:{p[1]}'})
-            else:
-                proxy_dicts.append(None)
+            proxy_dicts.append(parse_proxy(proxies[i % len(proxies)]))
     else:
         proxy_dicts = [None] * len(email_data_list)
 
@@ -432,13 +443,12 @@ def execute_batch(chat_id, email_data_list, password, lang, custom_name, hotmail
             fail_text = f"❌ `{email}` Failed: {err} (B#{my_batch_number})\n🔌 `{proxy_ip}`"
             if not is_web and chat_id:
                 bot1.edit_message_text(fail_text, chat_id=chat_id, message_id=status_msg.message_id, parse_mode='Markdown')
-                # Send retry button if checkpoint
                 if err == 'CHECKPOINT':
                     rid = str(uuid.uuid4())[:8]
                     CHECKPOINT_RETRY_POOL[rid] = {"email": email, "full_combo": full_combo}
                     mk = InlineKeyboardMarkup()
                     mk.add(InlineKeyboardButton("🔄 Try Again", callback_data=f"retry_chk_{rid}"))
-                    bot1.send_message(chat_id, f"⚠️ **CHECKPOINT DETECTED**\n📧 `{email}`\n\nYou can retry this specific account with proxy.", reply_markup=mk, parse_mode='Markdown')
+                    bot1.send_message(chat_id, f"⚠️ **CHECKPOINT DETECTED**\n📧 `{email}`\n\nClick below to retry.", reply_markup=mk, parse_mode='Markdown')
             else:
                 add_web_log(fail_text, "red")
 
@@ -1042,7 +1052,7 @@ def get_main_menu_1(chat_id):
     m = ReplyKeyboardMarkup(resize_keyboard=True)
     m.add(KeyboardButton('🚀 Create Account'))
     m.add(KeyboardButton('🔢 Create from Serial'))
-    m.add(KeyboardButton('📩 Hotmail Reader'))
+    m.add(KeyboardButton('📩 Hotmail Reader'), KeyboardButton('🔄 Retry Checkpoints'))
     if IS_RUNNING: m.add(KeyboardButton('🛑 Stop Process'))
     if str(chat_id) == ADMIN_ID:
         m.add(KeyboardButton('⚙️ Admin Panel'), KeyboardButton('🔌 Proxies'))
@@ -1066,8 +1076,28 @@ def proxy_menu(message):
     if str(message.chat.id) != ADMIN_ID: return
     m = ReplyKeyboardMarkup(resize_keyboard=True)
     m.add(KeyboardButton('➕ Add Proxy'), KeyboardButton('👀 View Proxies'))
-    m.add(KeyboardButton('🗑 Clear Proxies'), KeyboardButton('🔙 Back to Menu'))
-    bot1.send_message(message.chat.id, f"🔌 **Proxy Manager**\nTotal: `{len(load_proxies())}`", reply_markup=m, parse_mode='Markdown')
+    m.add(KeyboardButton('🗑 Clear Proxies'), KeyboardButton('🌍 Proxy Country'))
+    m.add(KeyboardButton('🔙 Back to Menu'))
+    bot1.send_message(message.chat.id, f"🔌 **Proxy Manager**\nTotal: `{len(load_proxies())}`\nCurrent Country: `{PROXY_COUNTRY}`", reply_markup=m, parse_mode='Markdown')
+
+@bot1.message_handler(func=lambda m: m.text == '🌍 Proxy Country')
+def proxy_country_menu(message):
+    if str(message.chat.id) != ADMIN_ID: return
+    countries = ['us', 'bd', 'in', 'fr', 'de', 'br', 'id', 'ru', 'gb', 'ca']
+    mk = InlineKeyboardMarkup()
+    row = []
+    for c in countries:
+        row.append(InlineKeyboardButton(c.upper(), callback_data=f"set_pc_{c}"))
+    for i in range(0, len(row), 3):
+        mk.row(*row[i:i+3])
+    bot1.send_message(message.chat.id, f"Select Proxy Country (Current: {PROXY_COUNTRY}):", reply_markup=mk)
+
+@bot1.callback_query_handler(func=lambda call: call.data.startswith('set_pc_'))
+def set_proxy_country_cb(call):
+    global PROXY_COUNTRY
+    PROXY_COUNTRY = call.data.split('_')[2]
+    bot1.answer_callback_query(call.id, f"Country set to {PROXY_COUNTRY.upper()}")
+    bot1.edit_message_text(f"✅ Proxy Country updated to: `{PROXY_COUNTRY.upper()}`", call.message.chat.id, call.message.message_id, parse_mode='Markdown')
 
 @bot1.message_handler(func=lambda m: m.text == '➕ Add Proxy')
 def add_proxy(message):
@@ -1147,26 +1177,78 @@ def start_serial_creation(message):
     user_states[chat_id] = {'step': 'serial_input'}
     bot1.send_message(chat_id, "🔢 **Paste Serial Numbers:**\n\n(Ex: `1, 2, 5` or `1-5` or one per line)", parse_mode='Markdown', reply_markup=ReplyKeyboardRemove())
 
+@bot1.message_handler(func=lambda m: m.text == '🔄 Retry Checkpoints')
+def retry_checkpoints_menu(message):
+    chat_id = message.chat.id
+    try:
+        res = supabase.table("failed_accounts").select("full_combo").eq("reason", "CHECKPOINT").limit(10).execute()
+        if not res.data: return bot1.send_message(chat_id, "✅ No checkpoint accounts in database!")
+        
+        mk = InlineKeyboardMarkup()
+        for row in res.data:
+            full_combo = row['full_combo']
+            email = full_combo.split('|')[0]
+            rid = str(uuid.uuid4())[:8]
+            CHECKPOINT_RETRY_POOL[rid] = {"email": email, "full_combo": full_combo}
+            mk.add(InlineKeyboardButton(f"🔄 {email}", callback_data=f"retry_chk_{rid}"))
+        bot1.send_message(chat_id, "🔄 **Checkpoint Retry List:**", reply_markup=mk, parse_mode='Markdown')
+    except Exception as e:
+        bot1.send_message(chat_id, f"Err: {e}")
+
 @bot1.callback_query_handler(func=lambda call: call.data.startswith('retry_chk_'))
 def retry_checkpoint_cb(call):
     rid = call.data.split('_')[2]
     if rid in CHECKPOINT_RETRY_POOL:
-        item = CHECKPOINT_RETRY_POOL.pop(rid)
-        bot1.answer_callback_query(call.id, "Retrying Account...")
-        chat_id = call.message.chat.id
-        
-        cfg = LAST_BATCH_CONFIG.get(chat_id)
-        if not cfg:
-            return bot1.send_message(chat_id, "❌ Session expired. Please start a new batch.")
-            
-        bot1.edit_message_text(f"🔄 Retrying `{item['email']}`...", chat_id, call.message.message_id, parse_mode='Markdown')
-        threading.Thread(target=execute_batch, args=(
-            chat_id, [{"email": item['email'], "full_combo": item['full_combo']}],
-            cfg['password'], cfg['lang'], cfg['custom_name'], cfg['hotmail_name'],
-            cfg['use_proxy'], cfg['os_type'], False
-        )).start()
+        mk = InlineKeyboardMarkup()
+        mk.row(InlineKeyboardButton("📱 iOS", callback_data=f"retry_os_{rid}_ios"), InlineKeyboardButton("🤖 Android", callback_data=f"retry_os_{rid}_android"))
+        bot1.edit_message_text("📱 **Select OS for Retry:**", call.message.chat.id, call.message.message_id, reply_markup=mk, parse_mode='Markdown')
     else:
-        bot1.answer_callback_query(call.id, "Expired or already retried.", show_alert=True)
+        bot1.answer_callback_query(call.id, "Expired.", show_alert=True)
+
+@bot1.callback_query_handler(func=lambda call: call.data.startswith('retry_os_'))
+def retry_os_cb(call):
+    parts = call.data.split('_')
+    rid = parts[2]
+    os_type = parts[3]
+    if rid not in CHECKPOINT_RETRY_POOL:
+        return bot1.answer_callback_query(call.id, "Expired.", show_alert=True)
+    
+    CHECKPOINT_RETRY_POOL[rid]['os_type'] = os_type
+    
+    mk = InlineKeyboardMarkup()
+    langs = ['us', 'bd', 'de', 'fr', 'br', 'id']
+    row = []
+    for l in langs:
+        row.append(InlineKeyboardButton(l.upper(), callback_data=f"retry_lang_{rid}_{l}"))
+    for i in range(0, len(row), 3):
+        mk.row(*row[i:i+3])
+        
+    bot1.edit_message_text(f"🌍 **Select Language for Retry ({os_type.upper()}):**", call.message.chat.id, call.message.message_id, reply_markup=mk, parse_mode='Markdown')
+
+@bot1.callback_query_handler(func=lambda call: call.data.startswith('retry_lang_'))
+def retry_lang_cb(call):
+    parts = call.data.split('_')
+    rid = parts[2]
+    lang = parts[3]
+    
+    if rid not in CHECKPOINT_RETRY_POOL:
+        return bot1.answer_callback_query(call.id, "Expired.", show_alert=True)
+        
+    item = CHECKPOINT_RETRY_POOL.pop(rid)
+    chat_id = call.message.chat.id
+    
+    cfg = LAST_BATCH_CONFIG.get(chat_id, {
+        'password': 'SOHAV17', 'custom_name': '', 'use_proxy': True, 'os_type': 'ios'
+    })
+    
+    os_type = item.get('os_type', cfg['os_type'])
+    
+    bot1.edit_message_text(f"🔄 Retrying `{item['email']}` with {os_type.upper()} | {lang.upper()}...", chat_id, call.message.message_id, parse_mode='Markdown')
+    threading.Thread(target=execute_batch, args=(
+        chat_id, [{"email": item['email'], "full_combo": item['full_combo']}],
+        cfg['password'], lang, cfg['custom_name'], "",
+        cfg['use_proxy'], os_type, False
+    )).start()
 
 @bot1.message_handler(func=lambda m: True)
 def handle_inputs(message):
@@ -1465,25 +1547,105 @@ def batch_menu_bot(message):
     chat_id = message.chat.id
     if not is_authorized(chat_id): return
     try:
-        acc = fetch_all_rows("accounts", "batch_id")
-        fail = fetch_all_rows("failed_accounts", "batch_id")
+        acc = fetch_all_rows("accounts", "batch_id, created_at")
+        fail = fetch_all_rows("failed_accounts", "batch_id, created_at")
         counts = {}
+        dates = {}
+        
         for row in acc:
             b = row.get('batch_id')
             if b is None: continue
             counts.setdefault(b, {"s": 0, "f": 0})["s"] += 1
+            if b not in dates and row.get('created_at'):
+                dates[b] = row['created_at'][:10] # YYYY-MM-DD
+                
         for row in fail:
             b = row.get('batch_id')
             if b is None: continue
             counts.setdefault(b, {"s": 0, "f": 0})["f"] += 1
+            if b not in dates and row.get('created_at'):
+                dates[b] = row['created_at'][:10]
+                
         if not counts: return bot2.send_message(chat_id, "❌ No batches yet.")
+        
+        today_str = datetime.datetime.now().strftime("%Y-%m-%d")
+        
         mk = InlineKeyboardMarkup()
-        for bn in sorted(counts.keys(), reverse=True)[:30]:
-            c = counts[bn]
-            label = f"📜 Old (Batch #0) — ✅{c['s']} ❌{c['f']}" if bn == 0 else f"Batch #{bn} — ✅{c['s']} ❌{c['f']}"
-            mk.add(InlineKeyboardButton(label, callback_data=f"bi_{bn}"))
-        bot2.send_message(chat_id, "📦 **Select Batch:**", reply_markup=mk, parse_mode='Markdown')
+        has_today = False
+        for bn in sorted(counts.keys(), reverse=True):
+            b_date = dates.get(bn, "Unknown")
+            if b_date == today_str:
+                c = counts[bn]
+                label = f"Batch #{bn} — ✅{c['s']} ❌{c['f']}"
+                mk.add(InlineKeyboardButton(label, callback_data=f"bi_{bn}"))
+                has_today = True
+                
+        if not has_today:
+            mk.add(InlineKeyboardButton("No batches today.", callback_data="none"))
+            
+        mk.add(InlineKeyboardButton("📅 Previous Days", callback_data="b_days"))
+        bot2.send_message(chat_id, "📦 **Today's Batches:**", reply_markup=mk, parse_mode='Markdown')
     except Exception as e: bot2.send_message(chat_id, f"Err: {e}")
+
+@bot2.callback_query_handler(func=lambda c: c.data == "b_days")
+def batch_days_cb(call):
+    try:
+        acc = fetch_all_rows("accounts", "batch_id, created_at")
+        dates = set()
+        for row in acc:
+            if row.get('created_at'): dates.add(row['created_at'][:10])
+            
+        today_str = datetime.datetime.now().strftime("%Y-%m-%d")
+        prev_dates = sorted([d for d in dates if d < today_str], reverse=True)[:14] # last 14 days
+        
+        if not prev_dates:
+            return bot2.answer_callback_query(call.id, "No previous days found.", show_alert=True)
+            
+        mk = InlineKeyboardMarkup()
+        for d in prev_dates:
+            mk.add(InlineKeyboardButton(f"📅 {d}", callback_data=f"b_date_{d}"))
+        mk.add(InlineKeyboardButton("🔙 Back", callback_data="b_today"))
+        
+        bot2.edit_message_text("📅 **Select Previous Day:**", call.message.chat.id, call.message.message_id, reply_markup=mk)
+    except Exception as e:
+        bot2.answer_callback_query(call.id, f"Err: {e}", show_alert=True)
+
+@bot2.callback_query_handler(func=lambda c: c.data == "b_today")
+def batch_today_cb(call):
+    call.message.text = "📦 Batch Downloads"
+    batch_menu_bot(call.message)
+
+@bot2.callback_query_handler(func=lambda c: c.data.startswith("b_date_"))
+def batch_date_cb(call):
+    d_str = call.data.replace("b_date_", "")
+    try:
+        acc = fetch_all_rows("accounts", "batch_id, created_at")
+        fail = fetch_all_rows("failed_accounts", "batch_id, created_at")
+        counts = {}
+        
+        for row in acc:
+            if row.get('created_at', '').startswith(d_str):
+                b = row.get('batch_id')
+                if b: counts.setdefault(b, {"s": 0, "f": 0})["s"] += 1
+                
+        for row in fail:
+            if row.get('created_at', '').startswith(d_str):
+                b = row.get('batch_id')
+                if b: counts.setdefault(b, {"s": 0, "f": 0})["f"] += 1
+                
+        if not counts:
+            return bot2.answer_callback_query(call.id, "No batches on this day.", show_alert=True)
+            
+        mk = InlineKeyboardMarkup()
+        for bn in sorted(counts.keys(), reverse=True):
+            c = counts[bn]
+            label = f"Batch #{bn} — ✅{c['s']} ❌{c['f']}"
+            mk.add(InlineKeyboardButton(label, callback_data=f"bi_{bn}"))
+        mk.add(InlineKeyboardButton("🔙 Back", callback_data="b_days"))
+        
+        bot2.edit_message_text(f"📦 **Batches for {d_str}:**", call.message.chat.id, call.message.message_id, reply_markup=mk)
+    except Exception as e:
+        bot2.answer_callback_query(call.id, f"Err: {e}", show_alert=True)
 
 @bot2.callback_query_handler(func=lambda c: c.data.startswith("bi_"))
 def batch_info_cb(call):
@@ -1491,8 +1653,8 @@ def batch_info_cb(call):
     mk = InlineKeyboardMarkup()
     mk.add(InlineKeyboardButton("✅ Success CSV", callback_data=f"bs_{bn}"), InlineKeyboardButton("❌ Failed CSV", callback_data=f"bf_{bn}"))
     mk.add(InlineKeyboardButton("🗑 Delete Batch", callback_data=f"bd_{bn}"))
-    mk.add(InlineKeyboardButton("🔙 Back", callback_data="bb"))
-    label = "📜 Old (Batch #0)" if bn == 0 else f"Batch #{bn}"
+    mk.add(InlineKeyboardButton("🔙 Back", callback_data="b_today"))
+    label = f"Batch #{bn}"
     bot2.edit_message_text(f"📦 **{label}** — choose download:", call.message.chat.id, call.message.message_id, reply_markup=mk, parse_mode='Markdown')
 
 @bot2.callback_query_handler(func=lambda c: c.data.startswith("bs_") or c.data.startswith("bf_"))
