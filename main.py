@@ -15,6 +15,10 @@ import csv
 import datetime
 import requests
 import io
+import imaplib
+import poplib
+import email
+import base64
 from concurrent.futures import ThreadPoolExecutor
 from flask import Flask, request, jsonify, send_file, render_template_string, session, redirect, url_for
 from supabase import create_client, Client
@@ -124,57 +128,128 @@ def is_authorized(chat_id):
     return str(chat_id) in load_auth_users()
 
 # ══════════════════════════════════════════════════════════
-# HOTMAIL OTP AUTO-FETCHER
+# MAIL READING PROTOCOLS (Graph / IMAP / POP3)
 # ══════════════════════════════════════════════════════════
+def get_access_token(client_id, refresh_token):
+    try:
+        token_res = requests.post("https://login.microsoftonline.com/common/oauth2/v2.0/token", data={
+            "client_id": client_id,
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            "scope": "https://graph.microsoft.com/.default offline_access"
+        }, timeout=10).json()
+        return token_res.get("access_token")
+    except:
+        return None
+
+def extract_otp_from_msg(msg_obj):
+    subject = str(msg_obj.get("Subject", ""))
+    sender = str(msg_obj.get("From", ""))
+    
+    if "facebook" in sender.lower() or "facebook" in subject.lower() or "code" in subject.lower():
+        body = ""
+        if msg_obj.is_multipart():
+            for part in msg_obj.walk():
+                if part.get_content_type() in ["text/plain", "text/html"]:
+                    try: body += part.get_payload(decode=True).decode(errors='ignore')
+                    except: pass
+        else:
+            try: body = msg_obj.get_payload(decode=True).decode(errors='ignore')
+            except: pass
+            
+        clean_body = re.sub(r'<[^>]+>', ' ', body)
+        clean_body = re.sub(r'\s+', ' ', clean_body)
+        match = re.search(r'\b(\d{5})\b', clean_body)
+        if not match: match = re.search(r'\b(\d{6})\b', clean_body)
+        if not match: match = re.search(r'\b(\d{5,6})\b', clean_body.replace(" ", ""))
+        if match: return match.group(1)
+    return None
+
+def read_via_graph(email_addr, access_token):
+    try:
+        msg_res = requests.get(
+            "https://graph.microsoft.com/v1.0/me/messages?$top=10&$orderby=receivedDateTime%20desc&$select=subject,body,from",
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=10
+        ).json()
+        
+        for m in msg_res.get("value", []):
+            subject = m.get("subject", "")
+            sender = m.get("from", {}).get("emailAddress", {}).get("address", "")
+            if "facebook" in sender.lower() or "facebook" in subject.lower() or "code" in subject.lower():
+                body = re.sub(r'<[^>]+>', ' ', m.get("body", {}).get("content", ""))
+                body = re.sub(r'\s+', ' ', body)
+                otp_match = re.search(r'\b(\d{5,6})\b', body)
+                if otp_match: return otp_match.group(1)
+        return None
+    except: return None
+
+def read_via_imap(email_addr, access_token):
+    try:
+        mail = imaplib.IMAP4_SSL("outlook.office365.com")
+        auth_string = f"user={email_addr}\x01auth=Bearer {access_token}\x01\x01"
+        mail.authenticate("XOAUTH2", lambda x: auth_string.encode("utf-8"))
+        mail.select("inbox")
+        
+        _, data = mail.search(None, 'ALL')
+        mail_ids = data[0].split()
+        if not mail_ids: 
+            mail.logout()
+            return None
+        
+        for i in reversed(mail_ids[-10:]):
+            _, msg_data = mail.fetch(i, '(RFC822)')
+            for response_part in msg_data:
+                if isinstance(response_part, tuple):
+                    msg = email.message_from_bytes(response_part[1])
+                    code = extract_otp_from_msg(msg)
+                    if code:
+                        mail.logout()
+                        return code
+        mail.logout()
+        return None
+    except: return None
+
+def read_via_pop3(email_addr, access_token):
+    try:
+        pop_conn = poplib.POP3_SSL('outlook.office365.com')
+        auth_string = f"user={email_addr}\x01auth=Bearer {access_token}\x01\x01"
+        auth_b64 = base64.b64encode(auth_string.encode()).decode()
+        
+        # POP3 XOAUTH2 command
+        pop_conn._shortcmd(f'AUTH XOAUTH2 {auth_b64}')
+        
+        num_messages = len(pop_conn.list()[1])
+        if num_messages == 0:
+            pop_conn.quit()
+            return None
+            
+        for i in range(num_messages, max(1, num_messages - 10), -1):
+            response, lines, octets = pop_conn.retr(i)
+            msg_content = b'\r\n'.join(lines).decode('utf-8', errors='ignore')
+            msg = email.message_from_string(msg_content)
+            code = extract_otp_from_msg(msg)
+            if code:
+                pop_conn.quit()
+                return code
+        pop_conn.quit()
+        return None
+    except: return None
+
 def fetch_otp_from_hotmail(email_addr, refresh_token, client_id, chat_id=None):
     global CANCEL_FLAG
     for attempt in range(2400): 
         if CANCEL_FLAG: return
         time.sleep(3)
-        try:
-            token_res = requests.post("https://login.microsoftonline.com/common/oauth2/v2.0/token", data={
-                "client_id": client_id,
-                "grant_type": "refresh_token",
-                "refresh_token": refresh_token,
-                "scope": "https://graph.microsoft.com/.default offline_access"
-            }, timeout=10)
-            
-            access_token = token_res.json().get("access_token")
-            if not access_token: continue
-
-            msg_res = requests.get(
-                "https://graph.microsoft.com/v1.0/me/messages?$top=10&$orderby=receivedDateTime%20desc&$select=subject,body,receivedDateTime,from",
-                headers={"Authorization": f"Bearer {access_token}"},
-                timeout=10
-            )
-            
-            messages = msg_res.json().get("value", [])
-            for msg in messages:
-                body = msg.get("body", {}).get("content", "")
-                subject = msg.get("subject", "")
-                sender = msg.get("from", {}).get("emailAddress", {}).get("address", "")
-                
-                if "facebook" in sender.lower() or "facebook" in subject.lower() or "code" in subject.lower():
-                    clean_body = re.sub(r'<[^>]+>', ' ', body)
-                    clean_body = re.sub(r'\s+', ' ', clean_body)
-                    
-                    match = re.search(r'\b(\d{5})\b', clean_body)
-                    if not match: match = re.search(r'\b(\d{6})\b', clean_body)
-                    if not match: match = re.search(r'\b(\d{5,6})\b', clean_body.replace(" ", ""))
-
-                    if match:
-                        code = match.group(1)
-                        
-                        try:
-                            supabase.table("otps").insert({"email": email_addr, "code": code}).execute()
-                        except Exception as e:
-                            print(f"Supabase OTP Error: {e}")
-
-                        if chat_id: 
-                            bot1.send_message(chat_id, f"📩 **OTP FOUND for `{email_addr}`**\n\n🔑 Code: `{code}`\n\n_Copied from Hotmail inbox!_", parse_mode='Markdown')
-                        return 
-        except Exception:
-            pass
+        access_token = get_access_token(client_id, refresh_token)
+        if not access_token: continue
+        
+        code = read_via_graph(email_addr, access_token)
+        if code:
+            try: supabase.table("otps").insert({"email": email_addr, "code": code}).execute()
+            except Exception as e: print(f"Supabase OTP Error: {e}")
+            if chat_id: bot1.send_message(chat_id, f"📩 **OTP FOUND for `{email_addr}`**\n\n🔑 Code: `{code}`", parse_mode='Markdown')
+            return 
 
 LANG_MAP = {
     'us': ('en-US,en;q=0.9', 'America/New_York'), 'gb': ('en-GB,en;q=0.9', 'Europe/London'),
@@ -365,7 +440,6 @@ def execute_batch(chat_id, email_data_list, password, lang, custom_name, hotmail
         WEB_STATE["current"] = idx
         email = item['email']; full_combo = item['full_combo']
         
-        # Determine name based on email type
         is_hotmail = any(domain in email.lower() for domain in ["@hotmail.", "@outlook.", "@live.", "@msn."])
         
         c_fname, c_lname = None, None
@@ -611,6 +685,12 @@ HTML_TEMPLATE = """
             <!-- Bulk Hotmail Reader Section -->
             <div class="card" style="margin-top: 15px;">
                 <label>📩 Bulk Hotmail Reader (Only FB Codes)</label>
+                <label style="margin-top:5px; color:#a78bfa;">Protocol</label>
+                <select id="readerProtocol">
+                    <option value="graph">Graph API (OAuth2)</option>
+                    <option value="imap">IMAP (OAuth2)</option>
+                    <option value="pop3">POP3 (OAuth2)</option>
+                </select>
                 <textarea id="readerCombo" placeholder="email|pass|refresh_token|client_id&#10;(Paste one combo per line)"></textarea>
                 <button class="btn" onclick="readHotmail()" style="background:#8b5cf6;">🔍 Read Inboxes</button>
                 <div id="readerResult" style="margin-top:10px; font-size:12px; max-height:300px; overflow-y:auto; background:#0f172a; padding:10px; border-radius:8px; display:none; border:1px solid #334155;"></div>
@@ -728,15 +808,16 @@ HTML_TEMPLATE = """
         const rawCombos = document.getElementById('readerCombo').value.trim();
         if(!rawCombos) return alert("Enter combos (one per line)");
         
+        const protocol = document.getElementById('readerProtocol').value;
         const combos = rawCombos.split('\\n').map(c => c.trim()).filter(c => c);
         const resultDiv = document.getElementById('readerResult');
         resultDiv.style.display = 'block';
-        resultDiv.innerHTML = `<p style="color:#fbbf24;">⏳ Fetching Facebook codes for ${combos.length} accounts...</p>`;
+        resultDiv.innerHTML = `<p style="color:#fbbf24;">⏳ Fetching Facebook codes via ${protocol.toUpperCase()} for ${combos.length} accounts...</p>`;
         
         const res = await fetch('/api/hotmail_reader', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ combos: combos })
+            body: JSON.stringify({ combos: combos, protocol: protocol })
         });
         const resData = await res.json();
         
@@ -898,6 +979,7 @@ def api_hotmail_reader():
     if not session.get('logged_in'): return jsonify({"error": "Unauthorized"}), 401
     data = request.json
     combos = data.get('combos', [])
+    protocol = data.get('protocol', 'graph')
     
     if not combos:
         return jsonify({"status": "error", "msg": "No combos provided"})
@@ -909,46 +991,31 @@ def api_hotmail_reader():
         if len(parts) < 4:
             return {"email": combo, "status": "error", "msg": "Invalid format (need email|pass|refresh_token|client_id)"}
         
-        email = parts[0]
+        email_addr = parts[0]
         refresh_token = parts[2]
         client_id = parts[3]
         
+        access_token = get_access_token(client_id, refresh_token)
+        if not access_token:
+            return {"email": email_addr, "status": "error", "msg": "Failed to get access token. Token expired."}
+            
         try:
-            token_res = requests.post("https://login.microsoftonline.com/common/oauth2/v2.0/token", data={
-                "client_id": client_id,
-                "grant_type": "refresh_token",
-                "refresh_token": refresh_token,
-                "scope": "https://graph.microsoft.com/.default offline_access"
-            }, timeout=10).json()
-            
-            access_token = token_res.get("access_token")
-            if not access_token:
-                return {"email": email, "status": "error", "msg": "Failed to get access token. Token expired."}
+            if protocol == 'graph':
+                code = read_via_graph(email_addr, access_token)
+            elif protocol == 'imap':
+                code = read_via_imap(email_addr, access_token)
+            elif protocol == 'pop3':
+                code = read_via_pop3(email_addr, access_token)
+            else:
+                code = read_via_graph(email_addr, access_token)
                 
-            msg_res = requests.get(
-                "https://graph.microsoft.com/v1.0/me/messages?$top=10&$orderby=receivedDateTime%20desc&$select=subject,body,receivedDateTime,from",
-                headers={"Authorization": f"Bearer {access_token}"},
-                timeout=10
-            ).json()
-            
             messages = []
-            for m in msg_res.get("value", []):
-                subject = m.get("subject", "")
-                sender = m.get("from", {}).get("emailAddress", {}).get("address", "")
+            if code:
+                messages.append({"otp": code})
                 
-                if "facebook" in sender.lower() or "facebook" in subject.lower() or "code" in subject.lower():
-                    body = re.sub(r'<[^>]+>', ' ', m.get("body", {}).get("content", ""))
-                    body = re.sub(r'\s+', ' ', body)
-                    otp_match = re.search(r'\b(\d{5,6})\b', body)
-                    if not otp_match: otp_match = re.search(r'\b(\d{5,6})\b', body.replace(" ", ""))
-                    
-                    if otp_match:
-                        messages.append({
-                            "otp": otp_match.group(1)
-                        })
-            return {"email": email, "status": "success", "data": messages}
+            return {"email": email_addr, "status": "success", "data": messages}
         except Exception as e:
-            return {"email": email, "status": "error", "msg": str(e)}
+            return {"email": email_addr, "status": "error", "msg": str(e)}
 
     with ThreadPoolExecutor(max_workers=5) as executor:
         futures = [executor.submit(process_combo, c) for c in combos]
@@ -1103,8 +1170,11 @@ def back_to_menu(message):
 def hotmail_reader_menu(message):
     chat_id = message.chat.id
     if not is_authorized(chat_id): return
-    user_states[chat_id] = {'step': 'hotmail_reader'}
-    bot1.send_message(chat_id, "📩 Paste your combos here (one per line):\n`email|pass|refresh_token|client_id`", parse_mode='Markdown', reply_markup=ReplyKeyboardRemove())
+    user_states[chat_id] = {'step': 'hotmail_reader_protocol'}
+    markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
+    markup.add('Graph API', 'IMAP', 'POP3')
+    markup.add('🔙 Cancel')
+    bot1.send_message(chat_id, "📩 **Select Mail Reader Protocol:**", reply_markup=markup)
 
 @bot1.message_handler(commands=['create'])
 @bot1.message_handler(func=lambda message: message.text == '🚀 Create Account')
@@ -1128,7 +1198,20 @@ def handle_inputs(message):
     if chat_id not in user_states: return
     state = user_states[chat_id]
 
-    if state['step'] == 'emails':
+    if state['step'] == 'hotmail_reader_protocol':
+        text = message.text.upper()
+        if 'GRAPH' in text: state['protocol'] = 'graph'
+        elif 'IMAP' in text: state['protocol'] = 'imap'
+        elif 'POP3' in text: state['protocol'] = 'pop3'
+        elif 'CANCEL' in text:
+            del user_states[chat_id]
+            return bot1.send_message(chat_id, "Cancelled.", reply_markup=get_main_menu_1(chat_id))
+        else: return bot1.send_message(chat_id, "❌ Select protocol from buttons.")
+        
+        state['step'] = 'hotmail_reader'
+        bot1.send_message(chat_id, f"📩 Protocol set to **{state['protocol'].upper()}**.\n\nPaste your combos here (one per line):\n`email|pass|refresh_token|client_id`", parse_mode='Markdown', reply_markup=ReplyKeyboardRemove())
+
+    elif state['step'] == 'emails':
         raw_lines = [l.strip() for l in message.text.split('\n') if l.strip()]
         email_data_list = []
         for line in raw_lines:
@@ -1148,52 +1231,31 @@ def handle_inputs(message):
 
     elif state['step'] == 'hotmail_reader':
         raw_lines = [l.strip() for l in message.text.split('\n') if l.strip()]
-        bot1.send_message(chat_id, f"⏳ Fetching Facebook codes for {len(raw_lines)} accounts...", reply_markup=get_main_menu_1(chat_id))
+        protocol = state.get('protocol', 'graph')
+        bot1.send_message(chat_id, f"⏳ Fetching Facebook codes via {protocol.upper()} for {len(raw_lines)} accounts...", reply_markup=get_main_menu_1(chat_id))
         
         def fetch_bulk_codes(combos):
             results = []
             for combo in combos:
                 parts = combo.split('|')
                 if len(parts) < 4: continue
-                email, refresh_token, client_id = parts[0], parts[2], parts[3]
+                email_addr, refresh_token, client_id = parts[0], parts[2], parts[3]
+                
+                access_token = get_access_token(client_id, refresh_token)
+                if not access_token:
+                    results.append(f"❌ `{email_addr}` - Invalid Token")
+                    continue
+                    
                 try:
-                    token_res = requests.post("https://login.microsoftonline.com/common/oauth2/v2.0/token", data={
-                        "client_id": client_id,
-                        "grant_type": "refresh_token",
-                        "refresh_token": refresh_token,
-                        "scope": "https://graph.microsoft.com/.default offline_access"
-                    }, timeout=10).json()
+                    if protocol == 'graph': code = read_via_graph(email_addr, access_token)
+                    elif protocol == 'imap': code = read_via_imap(email_addr, access_token)
+                    elif protocol == 'pop3': code = read_via_pop3(email_addr, access_token)
+                    else: code = read_via_graph(email_addr, access_token)
                     
-                    access_token = token_res.get("access_token")
-                    if not access_token: 
-                        results.append(f"❌ `{email}` - Invalid Token")
-                        continue
-                        
-                    msg_res = requests.get(
-                        "https://graph.microsoft.com/v1.0/me/messages?$top=5&$orderby=receivedDateTime%20desc&$select=subject,body,from",
-                        headers={"Authorization": f"Bearer {access_token}"},
-                        timeout=10
-                    ).json()
-                    
-                    found = False
-                    for m in msg_res.get("value", []):
-                        subject = m.get("subject", "")
-                        sender = m.get("from", {}).get("emailAddress", {}).get("address", "")
-                        
-                        if "facebook" in sender.lower() or "facebook" in subject.lower() or "code" in subject.lower():
-                            body = re.sub(r'<[^>]+>', ' ', m.get("body", {}).get("content", ""))
-                            body = re.sub(r'\s+', ' ', body)
-                            otp_match = re.search(r'\b(\d{5,6})\b', body)
-                            if not otp_match: otp_match = re.search(r'\b(\d{5,6})\b', body.replace(" ", ""))
-                            
-                            if otp_match:
-                                results.append(f"✅ `{email}` - Code: `{otp_match.group(1)}`")
-                                found = True
-                                break
-                    if not found:
-                        results.append(f"⚠️ `{email}` - No FB Code")
+                    if code: results.append(f"✅ `{email_addr}` - Code: `{code}`")
+                    else: results.append(f"⚠️ `{email_addr}` - No FB Code")
                 except Exception as e:
-                    results.append(f"❌ `{email}` - Error")
+                    results.append(f"❌ `{email_addr}` - Error")
             
             output_text = "📩 **Hotmail Reader Results:**\n\n" + "\n".join(results)
             for i in range(0, len(output_text), 4000):
