@@ -28,8 +28,8 @@ except ImportError:
 # ══════════════════════════════════════════════════════════
 # CONFIGURATIONS & DATABASE
 # ══════════════════════════════════════════════════════════
-BOT_TOKEN_1 = "9050767452:AAHto41auReAVjqJnzOeGKjbEW2Zue67oWQ"
-BOT_TOKEN_2 = "9141516064:AAEB9HzrjlTY0WVu3DLSw87ncOVfWRBKejg"
+BOT_TOKEN_1 = "9025360567:AAEJ2Jq2FSAVpDOVC3UCPYViQE9-sNI7NSk"
+BOT_TOKEN_2 = "9028640496:AAG8y-z28g98sjYfEjLC5yanhhA-YgP9zHQ"
 ADMIN_ID = "6408202140"
 WEB_PASSWORD = "SOHAV_ADMIN"
 
@@ -604,6 +604,14 @@ HTML_TEMPLATE = """
 
             <label style="margin-top:10px;">Live Logs</label>
             <div id="logs"></div>
+
+            <!-- Hotmail Reader Section -->
+            <div class="card" style="margin-top: 15px;">
+                <label>📩 Manual Hotmail Reader</label>
+                <input type="text" id="readerCombo" placeholder="email|pass|refresh_token|client_id">
+                <button class="btn" onclick="readHotmail()" style="background:#8b5cf6;">🔍 Read Inbox</button>
+                <div id="readerResult" style="margin-top:10px; font-size:12px; max-height:250px; overflow-y:auto; background:#0f172a; padding:10px; border-radius:8px; display:none; border:1px solid #334155;"></div>
+            </div>
         </div>
     </div>
 
@@ -711,6 +719,41 @@ HTML_TEMPLATE = """
         if (!confirm("Are you sure you want to stop the process?")) return;
         await fetch('/api/stop', { method: 'POST' });
         document.getElementById('stopBtn').style.display = 'none';
+    }
+
+    async function readHotmail() {
+        const combo = document.getElementById('readerCombo').value.trim();
+        if(!combo) return alert("Enter combo: email|pass|refresh_token|client_id");
+        
+        const resultDiv = document.getElementById('readerResult');
+        resultDiv.style.display = 'block';
+        resultDiv.innerHTML = '<p style="color:#fbbf24;">⏳ Fetching latest emails...</p>';
+        
+        const res = await fetch('/api/hotmail_reader', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ combo: combo })
+        });
+        const data = await res.json();
+        
+        if(data.status === 'success') {
+            if(data.data.length === 0) {
+                resultDiv.innerHTML = '<p style="color:#94a3b8;">No emails found.</p>';
+                return;
+            }
+            let html = '';
+            data.data.forEach(m => {
+                html += `<div style="border-bottom: 1px solid #334155; padding: 8px 0;">
+                    <div style="color:#38bdf8; font-weight:bold;">${m.subject}</div>
+                    <div style="color:#94a3b8; font-size:10px;">${m.from} | ${new Date(m.date).toLocaleString()}</div>
+                    ${m.otp ? `<div style="color:#4ade80; font-weight:bold; margin-top:4px;">OTP: <span style="font-size:16px; letter-spacing:2px;">${m.otp}</span></div>` : ''}
+                    <div style="color:#cbd5e1; margin-top:4px; font-size:11px;">${m.body_snippet}</div>
+                </div>`;
+            });
+            resultDiv.innerHTML = html;
+        } else {
+            resultDiv.innerHTML = `<p style="color:#ef4444;">❌ Error: ${data.msg}</p>`;
+        }
     }
 
     let isRunning = false;
@@ -837,6 +880,53 @@ def api_stop():
     CURRENT_BATCH_ID += 1
     add_web_log("🛑 Stop requested by user...", "red")
     return jsonify({"status": "stopping"})
+
+@app.route('/api/hotmail_reader', methods=['POST'])
+def api_hotmail_reader():
+    if not session.get('logged_in'): return jsonify({"error": "Unauthorized"}), 401
+    data = request.json
+    combo = data.get('combo', '')
+    parts = combo.split('|')
+    
+    if len(parts) < 4:
+        return jsonify({"status": "error", "msg": "Invalid combo! Format: email|pass|refresh_token|client_id"})
+    
+    email = parts[0]
+    refresh_token = parts[2]
+    client_id = parts[3]
+    
+    try:
+        token_res = requests.post("https://login.microsoftonline.com/common/oauth2/v2.0/token", data={
+            "client_id": client_id,
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            "scope": "https://graph.microsoft.com/.default offline_access"
+        }, timeout=10).json()
+        
+        access_token = token_res.get("access_token")
+        if not access_token:
+            return jsonify({"status": "error", "msg": "Failed to get access token. Token expired or invalid."})
+            
+        msg_res = requests.get(
+            "https://graph.microsoft.com/v1.0/me/messages?$top=5&$orderby=receivedDateTime%20desc&$select=subject,body,receivedDateTime,from",
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=10
+        ).json()
+        
+        messages = []
+        for m in msg_res.get("value", []):
+            body = re.sub(r'<[^>]+>', ' ', m.get("body", {}).get("content", ""))
+            otp_match = re.search(r'\b(\d{5,6})\b', body)
+            messages.append({
+                "subject": m.get("subject"),
+                "from": m.get("from", {}).get("emailAddress", {}).get("address"),
+                "date": m.get("receivedDateTime"),
+                "otp": otp_match.group(1) if otp_match else None,
+                "body_snippet": body[:150].strip() + "..."
+            })
+        return jsonify({"status": "success", "data": messages})
+    except Exception as e:
+        return jsonify({"status": "error", "msg": str(e)})
 
 @app.route('/download/success')
 def download_success():
