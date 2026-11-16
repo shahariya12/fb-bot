@@ -3,3 +3,4 @@ curl_cffi
 flask
 requests
 supabase
+openpyxl==3.1.2
