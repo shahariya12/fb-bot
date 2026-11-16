@@ -31,8 +31,11 @@ except ImportError:
 BOT_TOKEN_1 = "9025360567:AAEJ2Jq2FSAVpDOVC3UCPYViQE9-sNI7NSk"
 BOT_TOKEN_2 = "9028640496:AAG8y-z28g98sjYfEjLC5yanhhA-YgP9zHQ"
 ADMIN_ID = "6408202140"
-WEB_PASSWORD = "SOHAV"
+WEB_PASSWORD = "SOHAV_ADMIN"
 
+# ══════════════════════════════════════════════════════════
+# SUPABASE SETUP
+# ══════════════════════════════════════════════════════════
 SUPABASE_URL = "https://plojfqqvqnddxibaxrqr.supabase.co" # <-- Tomar Project URL
 SUPABASE_KEY = "sb_publishable_TkViojZqhR4ViRLfwEZpqg_TgKTE3Ps" # <-- Tomar anon key
 
@@ -52,7 +55,7 @@ CANCEL_FLAG = False
 WEB_OTPS = []
 
 # ══════════════════════════════════════════════════════════
-# 50 ANDROID USER-AGENTS
+# 50 ANDROID & 4 iOS USER-AGENTS
 # ══════════════════════════════════════════════════════════
 ANDROID_USER_AGENTS = [
     "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Mobile Safari/537.36",
@@ -105,6 +108,13 @@ ANDROID_USER_AGENTS = [
     "Mozilla/5.0 (Linux; Android 13; V2307) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.6943.42 Mobile Safari/537.36",
     "Mozilla/5.0 (Linux; Android 12; RMX3630) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.6834.79 Mobile Safari/537.36",
     "Mozilla/5.0 (Linux; Android 11; moto g(30)) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.39 Mobile Safari/537.36"
+]
+
+IOS_USER_AGENTS = [
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_1_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 16_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Mobile/15E148 Safari/604.1"
 ]
 
 # ══════════════════════════════════════════════════════════
@@ -271,12 +281,6 @@ PORTUGUESE_LAST_NAMES = ["Silva", "Santos", "Oliveira", "Souza", "Rodrigues", "F
 FRENCH_FIRST_NAMES = ["Jean", "Pierre", "Michel", "André", "Philippe", "Louis", "Nicolas", "François", "Alain", "Julien", "Bernard", "Marcel", "Daniel", "Paul", "Gérard", "Robert", "Patrick", "Henri", "Jacques", "Claude", "Éric", "Christian", "Georges", "René", "Pascal", "David", "Olivier", "Laurent", "Stéphane", "Thierry", "Thomas", "Sébastien", "Alexandre", "Vincent", "Christophe", "Maxime", "Jérôme", "Frédéric", "Xavier", "Fabrice", "Mathieu", "Antoine", "Romain", "Benjamin", "Guillaume", "Damien", "Yves", "Hugo", "Lucas", "Jules", "Léo", "Gabriel", "Raphaël", "Arthur", "Nathan", "Ethan", "Enzo", "Mathis", "Noah", "Tom"]
 FRENCH_LAST_NAMES = ["Martin", "Bernard", "Thomas", "Petit", "Robert", "Richard", "Durand", "Dubois", "Moreau", "Laurent", "Simon", "Michel", "Lefebvre", "Leroy", "Roux", "David", "Bertrand", "Morel", "Fournier", "Girard", "Bonnet", "Dupont", "Lambert", "Fontaine", "Rousseau", "Vincent", "Muller", "Lefevre", "Faure", "Andre", "Mercier", "Blanc", "Guerin", "Boyer", "Garnier", "Chevalier", "Francois", "Legrand", "Gauthier", "Garcia", "Perrin", "Robin", "Clement", "Morin", "Nicolas", "Henry", "Roussel", "Mathieu", "Gautier", "Masson", "Marchand", "Duval", "Denis", "Dumont", "Marie", "Lemaire", "Noel", "Meyer", "Dufour", "Meunier"]
 
-IOS_USER_AGENTS = [
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1",
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_1_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1",
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 16_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Mobile/15E148 Safari/604.1"
-]
 SCREEN_PROFILES = [(390, 844, 3.0), (393, 852, 3.0), (428, 926, 3.0), (430, 932, 3.0), (375, 812, 3.0)]
 
 def build_fingerprint(os_type="ios"):
@@ -396,6 +400,22 @@ def execute_batch(chat_id, email_data_list, password, lang, custom_name, use_pro
     success_count = 0; fail_count = 0
     WEB_STATE["total"] = len(email_data_list); WEB_STATE["success"] = 0
     
+    # ══════════════════════════════════════════════════════
+    # PURONO DATA MUCHHE FELA (Clear previous data)
+    # ══════════════════════════════════════════════════════
+    try:
+        supabase.table("accounts").delete().neq("id", 0).execute()
+        supabase.table("failed_accounts").delete().neq("id", 0).execute()
+        supabase.table("otps").delete().neq("id", 0).execute()
+        
+        if not is_web and chat_id:
+            bot1.send_message(chat_id, "🧹 Purono data muchhe fela hoyeche notun batch er jonno.")
+        else:
+            add_web_log("Cleared old data from Supabase for new batch.", "yellow")
+    except Exception as e:
+        print(f"Database Clear Error: {e}")
+    # ══════════════════════════════════════════════════════
+
     def process_one(item, idx, total):
         nonlocal success_count, fail_count
         if CANCEL_FLAG: return
@@ -1033,7 +1053,7 @@ def show_otps(message):
     if not is_authorized(chat_id): return
     
     try:
-        response = supabase.table("otps").select("email, code").order("id", desc=True).limit(20).execute()
+        response = supabase.table("otps").select("email, code").order("created_at", desc=True).limit(20).execute()
         data = response.data
         if not data:
             return bot2.send_message(chat_id, "❌ No OTPs found yet.")
@@ -1044,7 +1064,10 @@ def show_otps(message):
             
         bot2.send_message(chat_id, msg, parse_mode='Markdown')
     except Exception as e:
-        bot2.send_message(chat_id, f"Error: {e}")
+        if "PGRST125" in str(e):
+            bot2.send_message(chat_id, "❌ Database Error: `otps` table ta Supabase e toiri kora nei!")
+        else:
+            bot2.send_message(chat_id, f"Error: {e}")
 
 @bot2.message_handler(commands=['getcsv'])
 @bot2.message_handler(func=lambda message: message.text == '📁 Download Success')
@@ -1068,7 +1091,10 @@ def send_csv_2(message):
         mem.seek(0)
         bot2.send_document(chat_id, mem, visible_file_name="success.csv", caption="Here is your SUCCESS CSV.")
     except Exception as e:
-        bot2.send_message(chat_id, f"Error: {e}")
+        if "PGRST125" in str(e):
+            bot2.send_message(chat_id, "❌ Database Error: `accounts` table ta Supabase e toiri kora nei!")
+        else:
+            bot2.send_message(chat_id, f"Error: {e}")
 
 @bot2.message_handler(commands=['getfailed'])
 @bot2.message_handler(func=lambda message: message.text == '❌ Download Failed')
@@ -1092,7 +1118,10 @@ def send_failed_csv_2(message):
         mem.seek(0)
         bot2.send_document(chat_id, mem, visible_file_name="failed.csv", caption="Here is your FAILED CSV.")
     except Exception as e:
-        bot2.send_message(chat_id, f"Error: {e}")
+        if "PGRST125" in str(e):
+            bot2.send_message(chat_id, "❌ Database Error: `failed_accounts` table ta Supabase e toiri kora nei!")
+        else:
+            bot2.send_message(chat_id, f"Error: {e}")
 
 
 # ══════════════════════════════════════════════════════════
