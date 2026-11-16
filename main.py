@@ -48,7 +48,7 @@ bot2 = telebot.TeleBot(BOT_TOKEN_2)
 # GLOBAL VARIABLES
 # ══════════════════════════════════════════════════════════
 IS_RUNNING = False
-CANCEL_FLAG = False
+CANCEL_EVENT = threading.Event()   # responsive cancel
 CURRENT_BATCH_ID = 0
 WEB_LOGS = []
 WEB_STATE = {"total": 0, "success": 0, "current": 0}
@@ -124,81 +124,35 @@ def is_authorized(chat_id):
     return str(chat_id) in load_auth_users()
 
 # ══════════════════════════════════════════════════════════
-# MAIL READING PROTOCOLS (Auto System - Untouched)
-# ══════════════════════════════════════════════════════════
-def get_access_token(client_id, refresh_token):
-    try:
-        token_res = requests.post("https://login.microsoftonline.com/common/oauth2/v2.0/token", data={
-            "client_id": client_id,
-            "grant_type": "refresh_token",
-            "refresh_token": refresh_token,
-            "scope": "https://graph.microsoft.com/.default offline_access"
-        }, timeout=10).json()
-        return token_res.get("access_token")
-    except:
-        return None
-
-def read_via_graph(email_addr, access_token):
-    try:
-        msg_res = requests.get(
-            "https://graph.microsoft.com/v1.0/me/messages?$top=10&$orderby=receivedDateTime%20desc&$select=subject,body,from",
-            headers={"Authorization": f"Bearer {access_token}"},
-            timeout=10
-        ).json()
-        
-        for m in msg_res.get("value", []):
-            subject = m.get("subject", "")
-            sender = m.get("from", {}).get("emailAddress", {}).get("address", "")
-            if "facebook" in sender.lower() or "facebook" in subject.lower() or "code" in subject.lower():
-                body = re.sub(r'<[^>]+>', ' ', m.get("body", {}).get("content", ""))
-                body = re.sub(r'\s+', ' ', body)
-                otp_match = re.search(r'\b(\d{5,6})\b', body)
-                if otp_match: return otp_match.group(1)
-        return None
-    except: return None
-
-def fetch_otp_from_hotmail(email_addr, refresh_token, client_id, chat_id=None):
-    global CANCEL_FLAG
-    for attempt in range(2400): 
-        if CANCEL_FLAG: return
-        time.sleep(3)
-        access_token = get_access_token(client_id, refresh_token)
-        if not access_token: continue
-        
-        code = read_via_graph(email_addr, access_token)
-        if code:
-            try: supabase.table("otps").insert({"email": email_addr, "code": code}).execute()
-            except Exception as e: print(f"Supabase OTP Error: {e}")
-            if chat_id: bot1.send_message(chat_id, f"📩 **OTP FOUND for `{email_addr}`**\n\n🔑 Code: `{code}`", parse_mode='Markdown')
-            return 
-
-# ══════════════════════════════════════════════════════════
 # MANUAL READER VIA API (dongvanfb.net)
 # ══════════════════════════════════════════════════════════
 def get_code_via_api(combo, code_type="facebook"):
     try:
         parts = combo.split('|')
-        if len(parts) < 4: 
+        if len(parts) < 4:
             return None, "Invalid combo (need 4 parts)"
-        
+
         email = parts[0].strip()
         refresh_token = parts[2].strip()
         client_id = parts[3].strip()
-        
+
         payload = {
             "email": email,
             "refresh_token": refresh_token,
             "client_id": client_id,
             "type": code_type
         }
-        
+
         headers = {
             "Content-Type": "application/json",
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
         }
-        
-        res = requests.post("https://tools.dongvanfb.net/api/get_code_oauth2", json=payload, headers=headers, timeout=20)
-        
+
+        res = requests.post(
+            "https://tools.dongvanfb.net/api/get_code_oauth2",
+            json=payload, headers=headers, timeout=10
+        )
+
         if res.status_code == 200:
             res_json = res.json()
             if res_json.get("status") is True and "code" in res_json:
@@ -209,6 +163,36 @@ def get_code_via_api(combo, code_type="facebook"):
         return None, f"API Error: {res.status_code}"
     except Exception as e:
         return None, str(e)
+
+# ══════════════════════════════════════════════════════════
+# AUTO OTP FETCHER — 2 HOURS, INSTANT CANCEL
+# ══════════════════════════════════════════════════════════
+def fetch_otp_from_hotmail(email_addr, full_combo, chat_id=None):
+    MAX_WAIT_SECONDS = 2 * 60 * 60   # 2 hours wall clock
+    deadline = time.time() + MAX_WAIT_SECONDS
+
+    while time.time() < deadline:
+        # wakes IMMEDIATELY on CANCEL_EVENT.set() — no 5s block
+        if CANCEL_EVENT.wait(timeout=5):
+            return
+
+        code, error = get_code_via_api(full_combo, code_type="facebook")
+
+        if code:
+            try:
+                supabase.table("otps").insert({"email": email_addr, "code": code}).execute()
+            except Exception as e:
+                print(f"Supabase OTP Error: {e}")
+            if chat_id:
+                try:
+                    bot1.send_message(
+                        chat_id,
+                        f"📩 **AUTO OTP FOUND for `{email_addr}`**\n\n🔑 Code: `{code}`",
+                        parse_mode='Markdown'
+                    )
+                except Exception:
+                    pass
+            return
 
 LANG_MAP = {
     'us': ('en-US,en;q=0.9', 'America/New_York'), 'gb': ('en-GB,en;q=0.9', 'Europe/London'),
@@ -249,7 +233,7 @@ def build_fingerprint(os_type="ios"):
 
     sw, sh, dpr = random.choice(SCREEN_PROFILES)
     pringer_hash = hashlib.sha256(f"{ua}-{sw}x{sh}-{uuid.uuid4()}".encode()).hexdigest()[:32]
-    
+
     return {
         "impersonate": impersonate, "pringer": pringer_hash,
         "headers": {
@@ -266,43 +250,46 @@ def build_cookie_header(cookies):
     return '; '.join(parts)
 
 def warmup_session(session, fp, proxy):
-    if CANCEL_FLAG: return {}, ""
+    if CANCEL_EVENT.is_set(): return {}, ""
     steps = ["https://www.facebook.com/", f"{FB_REG_BASE}/reg/?cid=103"]
     collected, last_lsd = {}, "AdS-QY2mYrCcHP7sVf7ynTA6vTc"
     for url in steps:
-        if CANCEL_FLAG: return {}, ""
+        if CANCEL_EVENT.is_set(): return {}, ""
         try:
-            r = session.get(url, headers=fp["headers"], impersonate=fp["impersonate"], proxies=proxy, timeout=20)
-            time.sleep(random.uniform(1.5, 3.5))
+            r = session.get(url, headers=fp["headers"], impersonate=fp["impersonate"], proxies=proxy, timeout=10)
+            # responsive sleep — instant wake on cancel
+            if CANCEL_EVENT.wait(timeout=random.uniform(1.5, 3.5)):
+                return {}, ""
             collected.update(session.cookies.get_dict())
             m = re.search(r'"LSD",\[\],\{"token":"([^"]+)"', r.text)
             if m: last_lsd = m.group(1)
-        except: time.sleep(1)
+        except:
+            if CANCEL_EVENT.wait(timeout=1): return {}, ""
     return collected, last_lsd
 
 def fb_create_account(email, password, lang_code, custom_fname, custom_lname, proxy_dict, os_type):
-    if CANCEL_FLAG: return (None, 'CANCELLED')
+    if CANCEL_EVENT.is_set(): return (None, 'CANCELLED')
     session = cureq.Session()
-    
+
     fp = build_fingerprint(os_type)
     cookies_warm, lsd_token = warmup_session(session, fp, proxy_dict)
-    if CANCEL_FLAG: return (None, 'CANCELLED')
-    
-    time.sleep(random.uniform(2.0, 4.0))
-    if CANCEL_FLAG: return (None, 'CANCELLED')
+    if CANCEL_EVENT.is_set(): return (None, 'CANCELLED')
+
+    if CANCEL_EVENT.wait(timeout=random.uniform(2.0, 4.0)):
+        return (None, 'CANCELLED')
 
     reg_fp = build_fingerprint(os_type)
     try:
-        r = session.get(f"{FB_REG_BASE}/reg/?cid=103", headers=reg_fp["headers"], impersonate=reg_fp["impersonate"], proxies=proxy_dict, timeout=20)
+        r = session.get(f"{FB_REG_BASE}/reg/?cid=103", headers=reg_fp["headers"], impersonate=reg_fp["impersonate"], proxies=proxy_dict, timeout=10)
         m = re.search(r'"LSD",\[\],\{"token":"([^"]+)"', r.text)
         lsd = m.group(1) if m else lsd_token
-        
+
         if custom_fname and custom_lname: firstname, lastname = custom_fname, custom_lname
         elif lang_code == 'de': firstname, lastname = random.choice(GERMAN_FIRST_NAMES), random.choice(GERMAN_LAST_NAMES)
         elif lang_code == 'br': firstname, lastname = random.choice(PORTUGUESE_FIRST_NAMES), random.choice(PORTUGUESE_LAST_NAMES)
         elif lang_code == 'fr': firstname, lastname = random.choice(FRENCH_FIRST_NAMES), random.choice(FRENCH_LAST_NAMES)
         else: firstname, lastname = random.choice(DEFAULT_FIRST_NAMES), random.choice(DEFAULT_LAST_NAMES)
-        
+
         data = {
             'ccp': '2', 'reg_instance': str(uuid.uuid4()).replace('-', '')[:24],
             'submission_request': 'true', 'reg_impression_id': str(uuid.uuid4()),
@@ -310,7 +297,7 @@ def fb_create_account(email, password, lang_code, custom_fname, custom_lname, pr
             'lastname': lastname, 'field_names[1]': 'birthday_wrapper',
             'birthday_day': str(random.randint(1, 28)), 'birthday_month': str(random.randint(1, 12)), 'birthday_year': str(random.randint(1995, 2005)),
             'field_names[2]': 'reg_email__', 'reg_email__': email,
-            'field_names[3]': 'sex', 'sex': str(random.choice(['1', '2'])), 
+            'field_names[3]': 'sex', 'sex': str(random.choice(['1', '2'])),
             'field_names[4]': 'reg_passwd__', 'reg_passwd__': password,
             'submit': 'Sign up', 'lsd': lsd, 'jazoest': '24979', '__req': '7', '__fmt': '1',
         }
@@ -322,9 +309,9 @@ def fb_create_account(email, password, lang_code, custom_fname, custom_lname, pr
             'referer': f"{FB_REG_BASE}/reg/?cid=103", 'x-fb-lsd': lsd, "Cookie": build_cookie_header(cookies_warm)
         })
 
-        time.sleep(random.uniform(3.0, 6.0))
-        if CANCEL_FLAG: return (None, 'CANCELLED')
-        
+        if CANCEL_EVENT.wait(timeout=random.uniform(3.0, 6.0)):
+            return (None, 'CANCELLED')
+
         r = session.post(f"{FB_REG_BASE}/reg/submit/?app_id=103&multi_step_form=1", headers=headers, data=data, impersonate=reg_fp["impersonate"], proxies=proxy_dict, timeout=30)
     except Exception as e:
         return (None, f'POST_FAIL (Check Proxy/Net)')
@@ -334,7 +321,7 @@ def fb_create_account(email, password, lang_code, custom_fname, custom_lname, pr
     if uid:
         merged = dict(cookies_warm); merged.update(cookies)
         return ({'firstname': firstname, 'lastname': lastname, 'email': email, 'password': password, 'uid': uid, 'cookie': build_cookie_header(merged), 'session': session, 'proxy': proxy_dict}, None)
-    
+
     body = r.text.lower()
     if 'checkpoint' in body: return (None, 'CHECKPOINT (Use Proxy / Change Email)')
     if 'already' in body: return (None, 'TAKEN (Email exists)')
@@ -342,28 +329,28 @@ def fb_create_account(email, password, lang_code, custom_fname, custom_lname, pr
 
 def resend_otp(session, uid, proxy):
     try:
-        r = session.get("https://web.facebook.com/confirmemail.php?next=undefined", proxies=proxy, timeout=20)
+        r = session.get("https://web.facebook.com/confirmemail.php?next=undefined", proxies=proxy, timeout=10)
         lsd = re.search(r'"LSD",\[\],\{"token":"([^"]+)"', r.text)
         lsd = lsd.group(1) if lsd else ""
         dtsg = re.search(r'"DTSGInitialData",\[\],\{"token":"([^"]+)"', r.text) or re.search(r'name="fb_dtsg"\s+value="([^"]+)"', r.text)
         fb_dtsg = dtsg.group(1) if dtsg else ""
-        
+
         if not lsd or not fb_dtsg: return False
         headers = {'host': 'web.facebook.com', 'content-type': 'application/x-www-form-urlencoded', 'x-fb-lsd': lsd, 'origin': 'https://web.facebook.com'}
         variables = json.dumps({"input": {"actor_id": str(uid), "client_mutation_id": str(uuid.uuid4()), "machine_id": ""}}, separators=(',', ':'))
         data = {'av': str(uid), '__user': str(uid), 'fb_dtsg': fb_dtsg, 'lsd': lsd, 'variables': variables, 'doc_id': '9554972464608847'}
-        res = session.post(GRAPHQL_URL, headers=headers, data=data, proxies=proxy, timeout=20)
+        res = session.post(GRAPHQL_URL, headers=headers, data=data, proxies=proxy, timeout=15)
         return (res.status_code == 200 and "errors" not in res.text)
     except Exception: return False
 
 def execute_batch(chat_id, email_data_list, password, lang, custom_name, hotmail_name, use_proxy, os_type, is_web=False):
-    global IS_RUNNING, WEB_STATE, CANCEL_FLAG, CURRENT_BATCH_ID
-    
+    global IS_RUNNING, WEB_STATE, CURRENT_BATCH_ID
+
     CURRENT_BATCH_ID += 1
     my_batch_id = CURRENT_BATCH_ID
-    
+
     IS_RUNNING = True
-    CANCEL_FLAG = False
+    CANCEL_EVENT.clear()        # reset for this batch
     success_count = 0; fail_count = 0
     WEB_STATE["total"] = len(email_data_list); WEB_STATE["success"] = 0
 
@@ -378,29 +365,29 @@ def execute_batch(chat_id, email_data_list, password, lang, custom_name, hotmail
                 bot1.send_message(chat_id, "⚠️ Proxies selected but database is empty!")
             IS_RUNNING = False
             return
-            
+
         random.shuffle(proxies)
         for i in range(len(email_data_list)):
             p = proxies[i % len(proxies)].split(':')
-            if len(p) == 4: 
+            if len(p) == 4:
                 proxy_dicts.append({'http': f'http://{p[2]}:{p[3]}@{p[0]}:{p[1]}', 'https': f'http://{p[2]}:{p[3]}@{p[0]}:{p[1]}'})
-            elif len(p) == 3: 
+            elif len(p) == 3:
                 proxy_dicts.append({'http': f'http://{p[2]}@{p[0]}:{p[1]}', 'https': f'http://{p[2]}@{p[0]}:{p[1]}'})
-            elif len(p) == 2: 
+            elif len(p) == 2:
                 proxy_dicts.append({'http': f'http://{p[0]}:{p[1]}', 'https': f'http://{p[0]}:{p[1]}'})
-            else: 
+            else:
                 proxy_dicts.append(None)
     else:
         proxy_dicts = [None] * len(email_data_list)
 
     def process_one(item, idx, total):
         nonlocal success_count, fail_count
-        if CANCEL_FLAG or my_batch_id != CURRENT_BATCH_ID: return
+        if CANCEL_EVENT.is_set() or my_batch_id != CURRENT_BATCH_ID: return
         WEB_STATE["current"] = idx
         email = item['email']; full_combo = item['full_combo']
-        
+
         is_hotmail = any(domain in email.lower() for domain in ["@hotmail.", "@outlook.", "@live.", "@msn."])
-        
+
         c_fname, c_lname = None, None
         if is_hotmail and hotmail_name:
             parts = hotmail_name.split(' ', 1)
@@ -410,23 +397,23 @@ def execute_batch(chat_id, email_data_list, password, lang, custom_name, hotmail
             parts = custom_name.split(' ', 1)
             c_fname = parts[0]
             c_lname = parts[1] if len(parts) > 1 else "User"
-        
+
         assigned_proxy = proxy_dicts[idx - 1]
         proxy_ip = list(assigned_proxy.values())[0].split('@')[-1] if assigned_proxy else "Direct IP"
-        
+
         status_msg = None
-        if not is_web and chat_id: 
+        if not is_web and chat_id:
             status_msg = bot1.send_message(chat_id, f"⏳ [{idx}/{total}] Processing: `{email}`\n🔌 Proxy: `{proxy_ip}`", parse_mode='Markdown')
-        else: 
+        else:
             add_web_log(f"[{idx}/{total}] Processing: {email} (Proxy: {proxy_ip})", "cyan")
-        
+
         res, err = fb_create_account(email, password, lang, c_fname, c_lname, assigned_proxy, os_type)
-        
-        if CANCEL_FLAG or my_batch_id != CURRENT_BATCH_ID: return
+
+        if CANCEL_EVENT.is_set() or my_batch_id != CURRENT_BATCH_ID: return
 
         if res:
             success_count += 1; WEB_STATE["success"] = success_count
-            
+
             try:
                 supabase.table("accounts").insert({
                     "email": email,
@@ -437,23 +424,19 @@ def execute_batch(chat_id, email_data_list, password, lang, custom_name, hotmail
                 }).execute()
             except Exception as e:
                 print(f"Supabase Save Error: {e}")
-            
+
             msg_text = f"✅ **ACCOUNT CREATED!**\n\n📧 Email: `{email}`\n🔌 Proxy: `{proxy_ip}`"
-            
+
             if not is_web and chat_id: bot1.edit_message_text(msg_text, chat_id=chat_id, message_id=status_msg.message_id, parse_mode='Markdown')
             else: add_web_log(f"[+] SUCCESS: {email}", "green")
-            
+
             resend_otp(res['session'], res['uid'], res['proxy'])
-            
-            combo_parts = full_combo.split('|')
-            if len(combo_parts) >= 4:
-                refresh_token = combo_parts[2].strip()
-                client_id = combo_parts[3].strip()
-                threading.Thread(target=fetch_otp_from_hotmail, args=(email, refresh_token, client_id, chat_id if not is_web else None)).start()
+
+            threading.Thread(target=fetch_otp_from_hotmail, args=(email, full_combo, chat_id if not is_web else None)).start()
         else:
             if err == 'CANCELLED': return
             fail_count += 1
-            
+
             try:
                 supabase.table("failed_accounts").insert({
                     "full_combo": full_combo,
@@ -474,14 +457,14 @@ def execute_batch(chat_id, email_data_list, password, lang, custom_name, hotmail
         return
 
     IS_RUNNING = False
-    if CANCEL_FLAG:
+    if CANCEL_EVENT.is_set():
         finish_msg = f"🛑 **Batch Cancelled!**\n\n✅ Total Success: {success_count}\n❌ Total Failed: {fail_count}"
     else:
         finish_msg = f"🎉 **Batch Finished!**\n\n✅ Total Success: {success_count}\n❌ Total Failed: {fail_count}\n\n👉 _Type /start to open menu again._"
-    
-    if not is_web and chat_id: 
+
+    if not is_web and chat_id:
         bot1.send_message(chat_id, finish_msg, parse_mode='Markdown', reply_markup=get_main_menu_1(chat_id))
-    else: 
+    else:
         add_web_log(f"Finished! Success: {success_count}, Failed: {fail_count}", "yellow")
 
 # ══════════════════════════════════════════════════════════
@@ -544,7 +527,7 @@ HTML_TEMPLATE = """
         .btn-row .btn { flex: 1; font-size: 14px; padding: 12px; }
         .btn-row .btn.success { background: #10b981; }
         .btn-row .btn.failed { background: #ef4444; }
-        
+
         #otp-container { display: none; }
         .otp-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
         .otp-list-item { display: flex; justify-content: space-between; align-items: center; background: #0f172a; padding: 10px; border-radius: 8px; margin-bottom: 8px; border-left: 4px solid #10b981; }
@@ -557,7 +540,7 @@ HTML_TEMPLATE = """
         #logs { background: #000; height: 200px; overflow-y: auto; padding: 10px; border-radius: 8px; font-family: monospace; font-size: 12px; border: 1px solid #334155; margin-top: 15px; color: #ccc; }
         .log-line { margin-bottom: 4px; }
         .cyan { color: #22d3ee; } .green { color: #4ade80; } .red { color: #f87171; } .yellow { color: #fbbf24; } .white { color: #e2e8f0; }
-        
+
         .bottom-nav { position: fixed; bottom: 0; width: 100%; background: #1e293b; display: flex; border-top: 1px solid #334155; padding-bottom: env(safe-area-inset-bottom); }
         .nav-item { flex: 1; text-align: center; padding: 15px 0; color: #94a3b8; font-size: 12px; text-decoration: none; font-weight: bold; }
         .nav-item.active { color: #0ea5e9; }
@@ -572,7 +555,7 @@ HTML_TEMPLATE = """
     <div class="status-bar" id="status">Status: Idle</div>
 
     <div class="content">
-        
+
         <div id="otp-container">
             <div class="card">
                 <div class="otp-header">
@@ -710,7 +693,7 @@ HTML_TEMPLATE = """
         const otpRes = await fetch('/api/otps');
         const otps = await otpRes.json();
         const otpList = document.getElementById('otp-list');
-        
+
         if (otps.length > 0) {
             otpList.innerHTML = otps.map(o => `
                 <div class="otp-list-item">
@@ -729,7 +712,7 @@ HTML_TEMPLATE = """
     async function startBatch() {
         const rawEmails = document.getElementById('emails').value.trim();
         if (!rawEmails) return alert("Please enter emails!");
-        
+
         const osMode = document.getElementById('osMode').value;
         const passMode = document.getElementById('passMode').value;
         const customPass = document.getElementById('customPass').value;
@@ -769,26 +752,26 @@ HTML_TEMPLATE = """
     async function readHotmail() {
         const rawCombos = document.getElementById('readerCombo').value.trim();
         if(!rawCombos) return alert("Enter combos (one per line)");
-        
+
         const codeType = document.getElementById('readerType').value;
         const combos = rawCombos.split('\\n').map(c => c.trim()).filter(c => c);
         const resultDiv = document.getElementById('readerResult');
         resultDiv.style.display = 'block';
         resultDiv.innerHTML = `<p style="color:#fbbf24;">⏳ Fetching ${codeType.toUpperCase()} codes for ${combos.length} accounts...</p>`;
-        
+
         const res = await fetch('/api/hotmail_reader', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({ combos: combos, type: codeType })
         });
         const resData = await res.json();
-        
+
         if(resData.status === 'success') {
             let html = '';
             resData.results.forEach(acc => {
                 html += `<div style="margin-bottom: 12px; border-left: 3px solid #8b5cf6; padding-left: 10px;">`;
                 html += `<div style="color:#a78bfa; font-weight:bold; font-size:13px; margin-bottom:5px;">${acc.email}</div>`;
-                
+
                 if (acc.status === 'success') {
                     if (acc.data.length === 0) {
                         html += `<div style="color:#64748b; font-size:11px; font-style:italic;">No code found.</div>`;
@@ -816,7 +799,7 @@ HTML_TEMPLATE = """
     setInterval(async () => {
         const res = await fetch('/api/status');
         const data = await res.json();
-        
+
         isRunning = data.is_running;
 
         if (data.is_running) {
@@ -891,21 +874,21 @@ def api_delete_otps():
 
 @app.route('/api/start', methods=['POST'])
 def api_start():
-    global IS_RUNNING, WEB_LOGS, CANCEL_FLAG
+    global IS_RUNNING, WEB_LOGS
     if not session.get('logged_in'): return jsonify({"error": "Unauthorized"}), 401
     if IS_RUNNING: return jsonify({"error": "Already running"}), 400
-    
+
     data = request.json
     raw_emails = data.get('emails', [])
     if not raw_emails: return jsonify({"error": "No emails"}), 400
-    
+
     email_data_list = []
     for line in raw_emails:
         email = line.split('|')[0].strip()
         if '@' in email: email_data_list.append({"email": email, "full_combo": line})
-    
+
     if not email_data_list: return jsonify({"error": "No valid emails"}), 400
-    
+
     if data['pass_mode'] == 'fix':
         tz = datetime.timezone(datetime.timedelta(hours=6))
         password = f"SOHAV{datetime.datetime.now(tz).day}"
@@ -916,21 +899,20 @@ def api_start():
     use_proxy = data['proxy_mode'] == 'yes'
     custom_name = data.get('custom_name', '') if data.get('name_mode') == 'custom' else ''
     hotmail_name = data.get('hotmail_name', '').strip()
-        
+
     lang = data.get('lang', 'us')
     os_mode = data.get('os_mode', 'ios')
-    
-    WEB_LOGS = [] 
-    CANCEL_FLAG = False
+
+    WEB_LOGS = []
     add_web_log(f"Starting process for {len(email_data_list)} accounts...", "cyan")
     threading.Thread(target=execute_batch, args=(None, email_data_list, password, lang, custom_name, hotmail_name, use_proxy, os_mode, True)).start()
     return jsonify({"status": "started"})
 
 @app.route('/api/stop', methods=['POST'])
 def api_stop():
-    global CANCEL_FLAG, IS_RUNNING, CURRENT_BATCH_ID
+    global IS_RUNNING, CURRENT_BATCH_ID
     if not session.get('logged_in'): return jsonify({"error": "Unauthorized"}), 401
-    CANCEL_FLAG = True
+    CANCEL_EVENT.set()                # instant wake for all sleepers
     IS_RUNNING = False
     CURRENT_BATCH_ID += 1
     add_web_log("🛑 Stop requested by user...", "red")
@@ -942,7 +924,7 @@ def api_hotmail_reader():
     data = request.json
     combos = data.get('combos', [])
     code_type = data.get('type', 'facebook')
-    
+
     if not combos:
         return jsonify({"status": "error", "msg": "No combos provided"})
 
@@ -951,14 +933,14 @@ def api_hotmail_reader():
     def process_combo(combo):
         email_addr = combo.split('|')[0] if len(combo.split('|')) > 0 else combo
         code, error = get_code_via_api(combo, code_type=code_type)
-        
+
         if error:
             return {"email": email_addr, "status": "error", "msg": error}
-            
+
         messages = []
         if code:
             messages.append({"otp": code})
-            
+
         return {"email": email_addr, "status": "success", "data": messages}
 
     with ThreadPoolExecutor(max_workers=5) as executor:
@@ -971,18 +953,18 @@ def api_hotmail_reader():
 @app.route('/download/success')
 def download_success():
     if not session.get('logged_in'): return redirect(url_for('login'))
-    
+
     try:
         response = supabase.table("accounts").select("uid, password, cookie, full_combo").execute()
         data = response.data
         if not data: return "No Data Found", 404
-        
+
         output = io.StringIO()
         writer = csv.writer(output)
         writer.writerow(['UID', 'PASSWORD', 'COOKIE', 'FULL_MAIL'])
         for row in data:
             writer.writerow([row.get('uid'), row.get('password'), row.get('cookie'), row.get('full_combo')])
-        
+
         mem = io.BytesIO()
         mem.write(output.getvalue().encode('utf-8-sig'))
         mem.seek(0)
@@ -993,18 +975,18 @@ def download_success():
 @app.route('/download/failed')
 def download_failed():
     if not session.get('logged_in'): return redirect(url_for('login'))
-    
+
     try:
         response = supabase.table("failed_accounts").select("full_combo, reason").execute()
         data = response.data
         if not data: return "No Data Found", 404
-        
+
         output = io.StringIO()
         writer = csv.writer(output)
         writer.writerow(['FULL_MAIL', 'REASON'])
         for row in data:
             writer.writerow([row.get('full_combo'), row.get('reason')])
-        
+
         mem = io.BytesIO()
         mem.write(output.getvalue().encode('utf-8-sig'))
         mem.seek(0)
@@ -1022,7 +1004,7 @@ def get_main_menu_1(chat_id):
     markup.add(KeyboardButton('🚀 Create Account'))
     markup.add(KeyboardButton('📩 Hotmail Reader'))
     if IS_RUNNING: markup.add(KeyboardButton('🛑 Stop Process'))
-    if str(chat_id) == ADMIN_ID: 
+    if str(chat_id) == ADMIN_ID:
         markup.add(KeyboardButton('⚙️ Admin Panel'), KeyboardButton('🔌 Proxies'))
     return markup
 
@@ -1034,21 +1016,22 @@ def send_welcome_1(message):
 
 @bot1.message_handler(func=lambda message: message.text == '🛑 Stop Process')
 def stop_process(message):
-    global CANCEL_FLAG, IS_RUNNING, CURRENT_BATCH_ID
-    CANCEL_FLAG = True
+    global IS_RUNNING, CURRENT_BATCH_ID
+    CANCEL_EVENT.set()                 # instant wake
     IS_RUNNING = False
-    CURRENT_BATCH_ID += 1 
+    CURRENT_BATCH_ID += 1
+    user_states[message.chat.id] = {}
     bot1.send_message(message.chat.id, "🛑 **Stopping...**", reply_markup=get_main_menu_1(message.chat.id))
 
 @bot1.message_handler(func=lambda message: message.text == '🔌 Proxies')
 def proxy_menu(message):
     chat_id = message.chat.id
     if str(chat_id) != ADMIN_ID: return
-    
+
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add(KeyboardButton('➕ Add Proxy'), KeyboardButton('👀 View Proxies'))
     markup.add(KeyboardButton('🗑 Clear Proxies'), KeyboardButton('🔙 Back to Menu'))
-    
+
     proxies = load_proxies()
     bot1.send_message(chat_id, f"🔌 **Proxy Manager**\n\nTotal Proxies: `{len(proxies)}`\nSelect an option:", reply_markup=markup, parse_mode='Markdown')
 
@@ -1062,14 +1045,14 @@ def add_proxy(message):
 def save_proxy(message):
     chat_id = message.chat.id
     lines = [l.strip() for l in message.text.split('\n') if ':' in l]
-    
+
     if not lines:
         return bot1.send_message(chat_id, "❌ No valid proxy found.\nFormat: ip:port or ip:port:user:pass")
-        
+
     added = 0
     failed = 0
     errors = []
-    
+
     for line in lines:
         try:
             supabase.table("proxies").insert({"proxy_str": line}).execute()
@@ -1077,9 +1060,9 @@ def save_proxy(message):
         except Exception as e:
             failed += 1
             errors.append(str(e))
-            
+
     user_states[chat_id] = {}
-    
+
     if added > 0:
         bot1.send_message(chat_id, f"✅ Added {added} proxies to database.\n{f'Failed: {failed}' if failed else ''}", reply_markup=get_main_menu_1(chat_id))
     else:
@@ -1091,7 +1074,7 @@ def view_proxies(message):
     if str(message.chat.id) != ADMIN_ID: return
     proxies = load_proxies()
     if not proxies: return bot1.send_message(message.chat.id, "❌ No proxies found.")
-    
+
     text = "🔌 **Proxies List:**\n\n" + "\n".join([f"`{p}`" for p in proxies[:20]])
     if len(proxies) > 20: text += f"\n\n...and {len(proxies)-20} more."
     bot1.send_message(message.chat.id, text, parse_mode='Markdown')
@@ -1115,7 +1098,7 @@ def hotmail_reader_menu(message):
     chat_id = message.chat.id
     if not is_authorized(chat_id): return
     user_states[chat_id] = {'step': 'reader_type'}
-    
+
     markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
     markup.add('Facebook', 'All (Any Code)')
     markup.add('Instagram', 'Google')
@@ -1154,7 +1137,7 @@ def handle_inputs(message):
             del user_states[chat_id]
             return bot1.send_message(chat_id, "Cancelled.", reply_markup=get_main_menu_1(chat_id))
         else: return bot1.send_message(chat_id, "❌ Select from buttons.")
-        
+
         state['step'] = 'hotmail_reader'
         bot1.send_message(chat_id, f"✅ Type set to **{state['reader_type'].upper()}**.\n\nPaste your combos here (one per line):\n`email|pass|refresh_token|client_id`", parse_mode='Markdown', reply_markup=ReplyKeyboardRemove())
 
@@ -1164,13 +1147,13 @@ def handle_inputs(message):
         for line in raw_lines:
             email = line.split('|')[0].strip()
             if '@' in email: email_data_list.append({"email": email, "full_combo": line})
-                
+
         if not email_data_list: return bot1.send_message(chat_id, "❌ Invalid format.")
         state['email_data_list'] = email_data_list
         state['step'] = 'os_mode'
-        
+
         msg = f"✅ Got {len(email_data_list)} emails."
-        
+
         markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
         markup.add('iOS', 'Android')
         markup.add('🔙 Cancel')
@@ -1180,20 +1163,23 @@ def handle_inputs(message):
         raw_lines = [l.strip() for l in message.text.split('\n') if l.strip()]
         code_type = state.get('reader_type', 'facebook')
         bot1.send_message(chat_id, f"⏳ Fetching {code_type.upper()} codes via API for {len(raw_lines)} accounts...", reply_markup=get_main_menu_1(chat_id))
-        
+
         def fetch_bulk_codes(combos):
             results = []
             for combo in combos:
+                if CANCEL_EVENT.is_set():
+                    results.append("🛑 Cancelled by user.")
+                    break
                 email_addr = combo.split('|')[0] if len(combo.split('|')) > 0 else combo
                 code, error = get_code_via_api(combo, code_type=code_type)
-                
+
                 if code:
                     results.append(f"✅ `{email_addr}` - Code: `{code}`")
                 elif error:
                     results.append(f"❌ `{email_addr}` - {error}")
                 else:
                     results.append(f"⚠️ `{email_addr}` - No Code")
-            
+
             output_text = f"📩 **Hotmail Reader Results ({code_type.upper()}):**\n\n" + "\n".join(results)
             for i in range(0, len(output_text), 4000):
                 bot1.send_message(chat_id, output_text[i:i+4000], parse_mode='Markdown')
@@ -1208,7 +1194,7 @@ def handle_inputs(message):
             del user_states[chat_id]
             return bot1.send_message(chat_id, "Cancelled.", reply_markup=get_main_menu_1(chat_id))
         else: return bot1.send_message(chat_id, "❌ Select OS from buttons.")
-        
+
         state['step'] = 'password_mode'
         markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
         markup.add('Fix Password (SOHAVdd)', 'Custom Password')
@@ -1315,11 +1301,11 @@ def start_batch_from_state(chat_id, state):
     lang = state['lang']
     if lang in LANG_MAP: CURRENT_LANG_HEADER = LANG_MAP[lang][0]
     else: CURRENT_LANG_HEADER = LANG_MAP['us'][0]
-    
+
     state['step'] = None
     proxy_status = "Proxy ON" if state['use_proxy'] else "Direct IP"
     os_status = state['os_type'].upper()
-    
+
     bot1.send_message(chat_id, f"⚙️ Starting for {len(state['email_data_list'])} accounts ({proxy_status} | Lang: {lang.upper()} | OS: {os_status})...\n\n👇 *Please wait...*", parse_mode='Markdown', reply_markup=ReplyKeyboardRemove())
     threading.Thread(target=execute_batch, args=(chat_id, state['email_data_list'], state['password'], lang, state['custom_name'], state['hotmail_name'], state['use_proxy'], state['os_type'], False)).start()
 
@@ -1345,17 +1331,17 @@ def send_welcome_2(message):
 def show_otps(message):
     chat_id = message.chat.id
     if not is_authorized(chat_id): return
-    
+
     try:
         response = supabase.table("otps").select("email, code").order("created_at", desc=True).limit(50).execute()
         data = response.data
         if not data:
             return bot2.send_message(chat_id, "❌ No OTPs found yet.")
-            
+
         msg = "📩 **Recent OTPs (Last 50):**\n\n"
         for o in data:
             msg += f"`{o['email']}` - `{o['code']}`\n"
-            
+
         bot2.send_message(chat_id, msg, parse_mode='Markdown')
     except Exception as e:
         bot2.send_message(chat_id, f"Error: {e}")
@@ -1364,7 +1350,7 @@ def show_otps(message):
 def delete_otps_bot(message):
     chat_id = message.chat.id
     if not is_authorized(chat_id): return
-    
+
     try:
         supabase.table("otps").delete().neq("id", 0).execute()
         bot2.send_message(chat_id, "✅ All OTPs deleted from database!")
@@ -1376,18 +1362,18 @@ def delete_otps_bot(message):
 def send_csv_2(message):
     chat_id = message.chat.id
     if not is_authorized(chat_id): return
-    
+
     try:
         response = supabase.table("accounts").select("uid, password, cookie, full_combo").execute()
         data = response.data
         if not data: return bot2.send_message(chat_id, "❌ No Data.")
-        
+
         output = io.StringIO()
         writer = csv.writer(output)
         writer.writerow(['UID', 'PASSWORD', 'COOKIE', 'FULL_MAIL'])
         for row in data:
             writer.writerow([row.get('uid'), row.get('password'), row.get('cookie'), row.get('full_combo')])
-            
+
         mem = io.BytesIO()
         mem.write(output.getvalue().encode('utf-8-sig'))
         mem.seek(0)
@@ -1400,18 +1386,18 @@ def send_csv_2(message):
 def send_failed_csv_2(message):
     chat_id = message.chat.id
     if not is_authorized(chat_id): return
-    
+
     try:
         response = supabase.table("failed_accounts").select("full_combo, reason").execute()
         data = response.data
         if not data: return bot2.send_message(chat_id, "❌ No Data.")
-        
+
         output = io.StringIO()
         writer = csv.writer(output)
         writer.writerow(['FULL_MAIL', 'REASON'])
         for row in data:
             writer.writerow([row.get('full_combo'), row.get('reason')])
-            
+
         mem = io.BytesIO()
         mem.write(output.getvalue().encode('utf-8-sig'))
         mem.seek(0)
