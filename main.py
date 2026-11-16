@@ -54,6 +54,9 @@ CURRENT_BATCH_NUMBER = None
 WEB_LOGS = []
 WEB_STATE = {"total": 0, "success": 0, "current": 0, "batch_number": None}
 
+CHECKPOINT_RETRY_POOL = {}
+LAST_BATCH_CONFIG = {}
+
 def add_web_log(msg, color="white"):
     global WEB_LOGS
     t = datetime.datetime.now().strftime("%H:%M:%S")
@@ -157,7 +160,7 @@ def get_code_via_api(combo, code_type="facebook"):
             "email": parts[0].strip(),
             "refresh_token": parts[2].strip(),
             "client_id": parts[3].strip(),
-            "type": code_type
+            "type": code_type  # forced to facebook in auto fetch
         }
         headers = {"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"}
         res = requests.post("https://tools.dongvanfb.net/api/get_code_oauth2", json=payload, headers=headers, timeout=10)
@@ -171,13 +174,14 @@ def get_code_via_api(combo, code_type="facebook"):
         return None, str(e)
 
 # ══════════════════════════════════════════════════════════
-# AUTO OTP FETCHER (2 HOURS)
+# AUTO OTP FETCHER (2 HOURS) - FORCED FACEBOOK ONLY
 # ══════════════════════════════════════════════════════════
 def fetch_otp_from_hotmail(email_addr, full_combo, chat_id=None):
     deadline = time.time() + (2 * 60 * 60)
     while time.time() < deadline:
         if CANCEL_EVENT.wait(timeout=5):
             return
+        # code_type="facebook" strictly
         code, error = get_code_via_api(full_combo, code_type="facebook")
         if code:
             try:
@@ -428,6 +432,13 @@ def execute_batch(chat_id, email_data_list, password, lang, custom_name, hotmail
             fail_text = f"❌ `{email}` Failed: {err} (B#{my_batch_number})\n🔌 `{proxy_ip}`"
             if not is_web and chat_id:
                 bot1.edit_message_text(fail_text, chat_id=chat_id, message_id=status_msg.message_id, parse_mode='Markdown')
+                # Send retry button if checkpoint
+                if err == 'CHECKPOINT':
+                    rid = str(uuid.uuid4())[:8]
+                    CHECKPOINT_RETRY_POOL[rid] = {"email": email, "full_combo": full_combo}
+                    mk = InlineKeyboardMarkup()
+                    mk.add(InlineKeyboardButton("🔄 Try Again", callback_data=f"retry_chk_{rid}"))
+                    bot1.send_message(chat_id, f"⚠️ **CHECKPOINT DETECTED**\n📧 `{email}`\n\nYou can retry this specific account with proxy.", reply_markup=mk, parse_mode='Markdown')
             else:
                 add_web_log(fail_text, "red")
 
@@ -1091,7 +1102,6 @@ def view_proxies(message):
 def clear_proxies(message):
     if str(message.chat.id) != ADMIN_ID: return
     try:
-        # Using a broader filter that won't fail on UUID or INT
         supabase.table("proxies").delete().neq("proxy_str", "___SOMETHING_IMPOSSIBLE___").execute()
         bot1.send_message(message.chat.id, "✅ All proxies deleted.", reply_markup=get_main_menu_1(message.chat.id))
     except Exception as e: 
@@ -1101,6 +1111,15 @@ def clear_proxies(message):
 def back_to_menu(message):
     user_states[message.chat.id] = {}
     bot1.send_message(message.chat.id, "Main Menu:", reply_markup=get_main_menu_1(message.chat.id))
+
+@bot1.message_handler(func=lambda m: m.text == '⚙️ Admin Panel')
+def admin_panel(message):
+    if str(message.chat.id) != ADMIN_ID: return
+    user_states[message.chat.id] = {'step': 'admin_panel'}
+    m = ReplyKeyboardMarkup(resize_keyboard=True)
+    m.add(KeyboardButton('➕ Add User'), KeyboardButton('➖ Remove User'))
+    m.add(KeyboardButton('👥 List Users'), KeyboardButton('🔙 Back to Menu'))
+    bot1.send_message(message.chat.id, "⚙️ **Admin Panel**", reply_markup=m, parse_mode='Markdown')
 
 @bot1.message_handler(func=lambda m: m.text == '📩 Hotmail Reader')
 def hotmail_reader_menu(message):
@@ -1128,10 +1147,26 @@ def start_serial_creation(message):
     user_states[chat_id] = {'step': 'serial_input'}
     bot1.send_message(chat_id, "🔢 **Paste Serial Numbers:**\n\n(Ex: `1, 2, 5` or `1-5` or one per line)", parse_mode='Markdown', reply_markup=ReplyKeyboardRemove())
 
-def show_hotmail_name_menu(chat_id):
-    m = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
-    m.add('Auto Name', 'Custom Name'); m.add('🔙 Cancel')
-    bot1.send_message(chat_id, "📧 Name Mode (Hotmail):", reply_markup=m)
+@bot1.callback_query_handler(func=lambda call: call.data.startswith('retry_chk_'))
+def retry_checkpoint_cb(call):
+    rid = call.data.split('_')[2]
+    if rid in CHECKPOINT_RETRY_POOL:
+        item = CHECKPOINT_RETRY_POOL.pop(rid)
+        bot1.answer_callback_query(call.id, "Retrying Account...")
+        chat_id = call.message.chat.id
+        
+        cfg = LAST_BATCH_CONFIG.get(chat_id)
+        if not cfg:
+            return bot1.send_message(chat_id, "❌ Session expired. Please start a new batch.")
+            
+        bot1.edit_message_text(f"🔄 Retrying `{item['email']}`...", chat_id, call.message.message_id, parse_mode='Markdown')
+        threading.Thread(target=execute_batch, args=(
+            chat_id, [{"email": item['email'], "full_combo": item['full_combo']}],
+            cfg['password'], cfg['lang'], cfg['custom_name'], cfg['hotmail_name'],
+            cfg['use_proxy'], cfg['os_type'], False
+        )).start()
+    else:
+        bot1.answer_callback_query(call.id, "Expired or already retried.", show_alert=True)
 
 @bot1.message_handler(func=lambda m: True)
 def handle_inputs(message):
@@ -1140,7 +1175,38 @@ def handle_inputs(message):
     if chat_id not in user_states: return
     st = user_states[chat_id]
 
-    if st['step'] == 'reader_type':
+    if st['step'] == 'admin_panel':
+        if message.text == '➕ Add User':
+            st['step'] = 'admin_add_user'
+            bot1.send_message(chat_id, "✍️ Enter User ID to authorize:", reply_markup=ReplyKeyboardRemove())
+        elif message.text == '➖ Remove User':
+            st['step'] = 'admin_remove_user'
+            bot1.send_message(chat_id, "✍️ Enter User ID to remove:", reply_markup=ReplyKeyboardRemove())
+        elif message.text == '👥 List Users':
+            users = load_auth_users()
+            bot1.send_message(chat_id, "👥 **Authorized Users:**\n\n" + "\n".join([f"`{u}`" for u in users]), parse_mode='Markdown', reply_markup=get_main_menu_1(chat_id))
+            user_states[chat_id] = {}
+        else:
+            bot1.send_message(chat_id, "❌ Invalid choice.", reply_markup=get_main_menu_1(chat_id))
+            user_states[chat_id] = {}
+
+    elif st['step'] == 'admin_add_user':
+        try:
+            save_auth_user(message.text.strip())
+            bot1.send_message(chat_id, f"✅ User `{message.text.strip()}` added!", parse_mode='Markdown', reply_markup=get_main_menu_1(chat_id))
+        except Exception as e:
+            bot1.send_message(chat_id, f"❌ Error: {e}", reply_markup=get_main_menu_1(chat_id))
+        user_states[chat_id] = {}
+
+    elif st['step'] == 'admin_remove_user':
+        try:
+            remove_auth_user(message.text.strip())
+            bot1.send_message(chat_id, f"✅ User `{message.text.strip()}` removed!", parse_mode='Markdown', reply_markup=get_main_menu_1(chat_id))
+        except Exception as e:
+            bot1.send_message(chat_id, f"❌ Error: {e}", reply_markup=get_main_menu_1(chat_id))
+        user_states[chat_id] = {}
+
+    elif st['step'] == 'reader_type':
         t = message.text.lower()
         if 'facebook' in t: st['reader_type'] = 'facebook'
         elif 'all' in t: st['reader_type'] = 'all'
@@ -1283,23 +1349,14 @@ def handle_inputs(message):
             del user_states[chat_id]
             return bot1.send_message(chat_id, "Cancelled.", reply_markup=get_main_menu_1(chat_id))
         else:
-            st['custom_name'] = ''; st['step'] = 'name_mode_hotmail'; show_hotmail_name_menu(chat_id)
+            st['custom_name'] = ''
+            st['step'] = 'language'
+            show_languages(chat_id)
 
     elif st['step'] == 'custom_name_com':
-        st['custom_name'] = message.text.strip(); st['step'] = 'name_mode_hotmail'; show_hotmail_name_menu(chat_id)
-
-    elif st['step'] == 'name_mode_hotmail':
-        if message.text == 'Custom Name':
-            st['step'] = 'custom_name_hotmail'
-            bot1.send_message(chat_id, "✍️ Hotmail Name: First Last", reply_markup=ReplyKeyboardRemove())
-        elif 'Cancel' in message.text:
-            del user_states[chat_id]
-            return bot1.send_message(chat_id, "Cancelled.", reply_markup=get_main_menu_1(chat_id))
-        else:
-            st['hotmail_name'] = ''; st['step'] = 'language'; show_languages(chat_id)
-
-    elif st['step'] == 'custom_name_hotmail':
-        st['hotmail_name'] = message.text.strip(); st['step'] = 'language'; show_languages(chat_id)
+        st['custom_name'] = message.text.strip()
+        st['step'] = 'language'
+        show_languages(chat_id)
 
     elif st['step'] == 'language':
         if 'Cancel' in message.text:
@@ -1320,14 +1377,25 @@ def show_languages(chat_id):
     bot1.send_message(chat_id, "🌍 Language:", reply_markup=m)
 
 def start_batch_from_state(chat_id, st):
-    global CURRENT_LANG_HEADER
+    global CURRENT_LANG_HEADER, LAST_BATCH_CONFIG
     lang = st['lang']
     CURRENT_LANG_HEADER = LANG_MAP.get(lang, LANG_MAP['us'])[0]
     st['step'] = None
+    
+    # Save config for retries
+    LAST_BATCH_CONFIG[chat_id] = {
+        'password': st['password'],
+        'lang': lang,
+        'custom_name': st['custom_name'],
+        'hotmail_name': "",
+        'use_proxy': st['use_proxy'],
+        'os_type': st['os_type']
+    }
+    
     bot1.send_message(chat_id, f"⚙️ {len(st['email_data_list'])} accounts | Lang: {lang.upper()} | OS: {st['os_type'].upper()}...", reply_markup=ReplyKeyboardRemove())
     threading.Thread(target=execute_batch, args=(
         chat_id, st['email_data_list'], st['password'], lang,
-        st['custom_name'], st['hotmail_name'],
+        st['custom_name'], "",
         st['use_proxy'], st['os_type'], False
     )).start()
 
