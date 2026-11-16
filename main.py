@@ -15,6 +15,7 @@ import csv
 import datetime
 import requests
 import io
+import openpyxl
 from concurrent.futures import ThreadPoolExecutor
 from flask import Flask, request, jsonify, send_file, render_template_string, session, redirect, url_for
 from supabase import create_client, Client
@@ -452,7 +453,9 @@ def execute_batch(chat_id, email_data_list, password, lang, custom_name, hotmail
             else:
                 add_web_log(fail_text, "red")
 
-    with ThreadPoolExecutor(max_workers=len(email_data_list)) as executor:
+    # Limit maximum concurrent workers to 20
+    workers = min(len(email_data_list), 20)
+    with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = [executor.submit(process_one, item, i+1, len(email_data_list)) for i, item in enumerate(email_data_list)]
         for future in futures: future.result()
 
@@ -1167,7 +1170,7 @@ def start_creation(message):
     if not is_authorized(chat_id): return
     if IS_RUNNING: return bot1.send_message(chat_id, "⚠️ Running!")
     user_states[chat_id] = {'step': 'emails'}
-    bot1.send_message(chat_id, "📧 Paste emails:", reply_markup=ReplyKeyboardRemove())
+    bot1.send_message(chat_id, "📧 **Paste emails** OR **Send a .xlsx / .txt / .csv file** containing combos:", reply_markup=ReplyKeyboardRemove(), parse_mode='Markdown')
 
 @bot1.message_handler(func=lambda m: m.text == '🔢 Create from Serial')
 def start_serial_creation(message):
@@ -1250,6 +1253,65 @@ def retry_lang_cb(call):
         cfg['use_proxy'], os_type, False
     )).start()
 
+def process_extracted_emails(chat_id, edl):
+    if not edl:
+        user_states[chat_id] = {}
+        return bot1.send_message(chat_id, "❌ No valid emails found. Please try again.", reply_markup=get_main_menu_1(chat_id))
+    st = user_states[chat_id]
+    st['email_data_list'] = edl
+    st['step'] = 'os_mode'
+    m = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
+    m.add('iOS', 'Android'); m.add('🔙 Cancel')
+    bot1.send_message(chat_id, f"✅ {len(edl)} emails found.\n📱 OS:", reply_markup=m)
+
+@bot1.message_handler(content_types=['document'])
+def handle_document(message):
+    chat_id = message.chat.id
+    if not is_authorized(chat_id): return
+    if chat_id not in user_states or user_states[chat_id].get('step') != 'emails': 
+        return bot1.reply_to(message, "⚠️ Please click '🚀 Create Account' first.")
+        
+    file_info = bot1.get_file(message.document.file_id)
+    downloaded_file = bot1.download_file(file_info.file_path)
+    
+    file_name = message.document.file_name.lower()
+    edl = []
+    
+    try:
+        if file_name.endswith('.xlsx'):
+            wb = openpyxl.load_workbook(io.BytesIO(downloaded_file), read_only=True, data_only=True)
+            ws = wb.active
+            for row in ws.iter_rows(values_only=True):
+                row_data = [str(cell).strip() for cell in row if cell is not None]
+                if not row_data: continue
+                
+                if len(row_data) >= 4:
+                    combo = "|".join(row_data[:4])
+                elif len(row_data) == 1:
+                    combo = row_data[0]
+                else:
+                    combo = "|".join(row_data)
+                    
+                if '@' in combo:
+                    email = combo.split('|')[0].strip() if '|' in combo else combo.strip()
+                    if '@' in email:
+                        edl.append({"email": email, "full_combo": combo})
+        elif file_name.endswith('.txt') or file_name.endswith('.csv'):
+            text = downloaded_file.decode('utf-8', errors='ignore')
+            lines = [l.strip() for l in text.split('\n') if l.strip()]
+            for l in lines:
+                e = l.split('|')[0].strip() if '|' in l else l.split(',')[0].strip()
+                if '@' in e:
+                    combo = l.replace(',', '|') if ',' in l and '|' not in l else l
+                    edl.append({"email": e, "full_combo": combo})
+        else:
+            return bot1.reply_to(message, "❌ Unsupported file format. Send .xlsx, .txt, or .csv")
+            
+        process_extracted_emails(chat_id, edl)
+    except Exception as e:
+        bot1.send_message(chat_id, f"❌ Error reading file: {e}")
+        user_states[chat_id] = {}
+
 @bot1.message_handler(func=lambda m: True)
 def handle_inputs(message):
     chat_id = message.chat.id
@@ -1307,12 +1369,7 @@ def handle_inputs(message):
         for l in lines:
             e = l.split('|')[0].strip()
             if '@' in e: edl.append({"email": e, "full_combo": l})
-        if not edl: return bot1.send_message(chat_id, "❌ Invalid.")
-        st['email_data_list'] = edl
-        st['step'] = 'os_mode'
-        m = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
-        m.add('iOS', 'Android'); m.add('🔙 Cancel')
-        bot1.send_message(chat_id, f"✅ {len(edl)} emails.\n📱 OS:", reply_markup=m)
+        process_extracted_emails(chat_id, edl)
 
     elif st['step'] == 'serial_input':
         text = message.text.strip()
