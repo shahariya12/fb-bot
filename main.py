@@ -33,7 +33,6 @@ BOT_TOKEN_2 = "9028640496:AAG8y-z28g98sjYfEjLC5yanhhA-YgP9zHQ"
 ADMIN_ID = "6408202140"
 WEB_PASSWORD = "SOHAV_ADMIN"
 
-# SUPABASE SETUP (Tomar deya link ar key)
 SUPABASE_URL = "https://plojfqqvqnddxibaxrqr.supabase.co"
 SUPABASE_KEY = "sb_publishable_TkViojZqhR4ViRLfwEZpqg_TgKTE3Ps"
 
@@ -521,7 +520,7 @@ HTML_TEMPLATE = """
         .btn-row .btn.failed { background: #ef4444; }
         
         /* OTP Section */
-        #otp-container { display: none; background: #064e3b; border: 1px solid #10b981; padding: 15px; border-radius: 12px; margin-bottom: 15px; }
+        #otp-container { display: none; }
         .otp-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
         .otp-list-item { display: flex; justify-content: space-between; align-items: center; background: #0f172a; padding: 10px; border-radius: 8px; margin-bottom: 8px; border-left: 4px solid #10b981; }
         .otp-code { font-family: monospace; font-size: 18px; font-weight: bold; color: #4ade80; letter-spacing: 2px; }
@@ -537,81 +536,90 @@ HTML_TEMPLATE = """
         .bottom-nav { position: fixed; bottom: 0; width: 100%; background: #1e293b; display: flex; border-top: 1px solid #334155; padding-bottom: env(safe-area-inset-bottom); }
         .nav-item { flex: 1; text-align: center; padding: 15px 0; color: #94a3b8; font-size: 12px; text-decoration: none; font-weight: bold; }
         .nav-item.active { color: #0ea5e9; }
+        .hidden { display: none !important; }
     </style>
 </head>
 <body>
     <div class="header">
         <h1>🚀 Creator App</h1>
-        <span style="font-size:12px; color:#94a3b8;">v2.4</span>
+        <span style="font-size:12px; color:#94a3b8;">v2.5</span>
     </div>
     <div class="status-bar" id="status">Status: Idle</div>
 
-    <div class="content" id="mainForm">
-    
+    <div class="content">
+        
+        <!-- OTP LIST SECTION (Hidden by default) -->
         <div id="otp-container">
-            <div class="otp-header">
-                <label style="color:#4ade80; margin-bottom:0;">📩 Recent OTPs</label>
-                <button class="del-btn" onclick="deleteOTPs()">🗑 Delete</button>
-            </div>
-            <div id="otp-list"></div>
-        </div>
-
-        <div class="card">
-            <label>Emails / Combos</label>
-            <textarea id="emails" placeholder="email|password|refresh_token|client_id"></textarea>
-
-            <label>OS Mode</label>
-            <select id="osMode">
-                <option value="ios">iOS (Safari)</option>
-                <option value="android">Android (Chrome)</option>
-            </select>
-
-            <label>Password Mode</label>
-            <select id="passMode" onchange="togglePass()">
-                <option value="fix">Fix Password (SOHAVdd)</option>
-                <option value="custom">Custom Password</option>
-            </select>
-            <input type="text" id="customPass" placeholder="Enter Custom Password" style="display:none;">
-
-            <label>Proxy Mode</label>
-            <select id="proxyMode">
-                <option value="no">No Proxy (Direct)</option>
-                <option value="yes">Use Proxy (Auto)</option>
-            </select>
-
-            <label>Name Mode</label>
-            <select id="nameMode" onchange="toggleName()">
-                <option value="auto">Auto Name</option>
-                <option value="custom">Custom Name</option>
-            </select>
-            <input type="text" id="customName" placeholder="Firstname Lastname" style="display:none;">
-
-            <label>Language</label>
-            <select id="lang">
-                <option value="de">German (DE)</option>
-                <option value="fr">French (FR)</option>
-                <option value="br">Portuguese (BR)</option>
-                <option value="us">English (US)</option>
-            </select>
-
-            <button class="btn" id="startBtn" onclick="startBatch()">▶ START PROCESS</button>
-            <button class="btn stop" id="stopBtn" onclick="stopBatch()">🛑 STOP PROCESS</button>
-        </div>
-
-        <div class="card">
-            <label>Downloads (From Cloud)</label>
-            <div class="btn-row">
-                <a href="/download/success" class="btn success" style="text-decoration:none; text-align:center;">📁 Success CSV</a>
-                <a href="/download/failed" class="btn failed" style="text-decoration:none; text-align:center;">❌ Failed CSV</a>
+            <div class="card">
+                <div class="otp-header">
+                    <label style="color:#4ade80; margin-bottom:0;">📩 Recent OTPs</label>
+                    <button class="del-btn" onclick="deleteOTPs()">🗑 Delete All</button>
+                </div>
+                <div id="otp-list"></div>
             </div>
         </div>
 
-        <label style="margin-top:10px;">Live Logs</label>
-        <div id="logs"></div>
+        <!-- MAIN FORM SECTION -->
+        <div id="mainForm">
+            <div class="card">
+                <label>Emails / Combos</label>
+                <textarea id="emails" placeholder="email|password|refresh_token|client_id"></textarea>
+
+                <label>OS Mode</label>
+                <select id="osMode">
+                    <option value="ios">iOS (Safari)</option>
+                    <option value="android">Android (Chrome)</option>
+                </select>
+
+                <label>Password Mode</label>
+                <select id="passMode" onchange="togglePass()">
+                    <option value="fix">Fix Password (SOHAVdd)</option>
+                    <option value="custom">Custom Password</option>
+                </select>
+                <input type="text" id="customPass" placeholder="Enter Custom Password" style="display:none;">
+
+                <label>Proxy Mode</label>
+                <select id="proxyMode">
+                    <option value="no">No Proxy (Direct)</option>
+                    <option value="yes">Use Proxy (Auto)</option>
+                </select>
+
+                <label>Name Mode</label>
+                <select id="nameMode" onchange="toggleName()">
+                    <option value="auto">Auto Name</option>
+                    <option value="custom">Custom Name</option>
+                </select>
+                <input type="text" id="customName" placeholder="Firstname Lastname" style="display:none;">
+
+                <label>Language</label>
+                <select id="lang">
+                    <option value="de">German (DE)</option>
+                    <option value="fr">French (FR)</option>
+                    <option value="br">Portuguese (BR)</option>
+                    <option value="us">English (US)</option>
+                </select>
+
+                <button class="btn" id="startBtn" onclick="startBatch()">▶ START PROCESS</button>
+                <button class="btn stop" id="stopBtn" onclick="stopBatch()">🛑 STOP PROCESS</button>
+            </div>
+
+            <div class="card">
+                <label>Downloads (From Cloud)</label>
+                <div class="btn-row">
+                    <a href="/download/success" class="btn success" style="text-decoration:none; text-align:center;">📁 Success CSV</a>
+                    <a href="/download/failed" class="btn failed" style="text-decoration:none; text-align:center;">❌ Failed CSV</a>
+                </div>
+            </div>
+
+            <label style="margin-top:10px;">Live Logs</label>
+            <div id="logs"></div>
+        </div>
     </div>
 
+    <!-- BOTTOM NAVIGATION BAR -->
     <div class="bottom-nav">
-        <a href="#" class="nav-item active">🏠 Home</a>
+        <a href="#" class="nav-item active" id="nav-home" onclick="showHome(event)">🏠 Home</a>
+        <a href="#" class="nav-item" id="nav-otp" onclick="showOTP(event)">📩 OTP List</a>
         <a href="#" class="nav-item" onclick="window.location.reload()">🔄 Refresh</a>
         <a href="/logout" class="nav-item" style="color:#ef4444;">🚪 Logout</a>
     </div>
@@ -622,6 +630,23 @@ HTML_TEMPLATE = """
     }
     function toggleName() {
         document.getElementById('customName').style.display = document.getElementById('nameMode').value === 'custom' ? 'block' : 'none';
+    }
+
+    function showHome(e) {
+        if(e) e.preventDefault();
+        document.getElementById('mainForm').classList.remove('hidden');
+        document.getElementById('otp-container').classList.add('hidden');
+        document.getElementById('nav-home').classList.add('active');
+        document.getElementById('nav-otp').classList.remove('active');
+    }
+
+    function showOTP(e) {
+        if(e) e.preventDefault();
+        document.getElementById('mainForm').classList.add('hidden');
+        document.getElementById('otp-container').classList.remove('hidden');
+        document.getElementById('nav-otp').classList.add('active');
+        document.getElementById('nav-home').classList.remove('active');
+        fetchOTPs(); // Refresh list immediately
     }
 
     function copyCode(code) {
@@ -635,7 +660,27 @@ HTML_TEMPLATE = """
     async function deleteOTPs() {
         if(!confirm("Are you sure you want to delete all OTPs from database?")) return;
         await fetch('/api/delete_otps', { method: 'POST' });
-        document.getElementById('otp-container').style.display = 'none';
+        fetchOTPs(); // Reload empty list
+    }
+
+    async function fetchOTPs() {
+        const otpRes = await fetch('/api/otps');
+        const otps = await otpRes.json();
+        const otpList = document.getElementById('otp-list');
+        
+        if (otps.length > 0) {
+            otpList.innerHTML = otps.map(o => `
+                <div class="otp-list-item">
+                    <div>
+                        <span class="otp-email">${o.email}</span>
+                        <span class="otp-code">${o.code}</span>
+                    </div>
+                    <button class="copy-btn" onclick="copyCode('${o.code}')">Copy</button>
+                </div>
+            `).join('');
+        } else {
+            otpList.innerHTML = `<p style="color:#94a3b8; font-size:12px; text-align:center;">No OTPs found yet.</p>`;
+        }
     }
 
     async function startBatch() {
@@ -702,23 +747,10 @@ HTML_TEMPLATE = """
             logsDiv.scrollTop = logsDiv.scrollHeight;
         }
 
-        const otpRes = await fetch('/api/otps');
-        const otps = await otpRes.json();
-        
-        if (otps.length > 0) {
-            document.getElementById('otp-container').style.display = 'block';
-            const otpList = document.getElementById('otp-list');
-            otpList.innerHTML = otps.map(o => `
-                <div class="otp-list-item">
-                    <div>
-                        <span class="otp-email">${o.email}</span>
-                        <span class="otp-code">${o.code}</span>
-                    </div>
-                    <button class="copy-btn" onclick="copyCode('${o.code}')">Copy</button>
-                </div>
-            `).join('');
-        } else {
-            document.getElementById('otp-container').style.display = 'none';
+        // Check if OTP tab is active, then only update it
+        const otpContainer = document.getElementById('otp-container');
+        if (!otpContainer.classList.contains('hidden')) {
+            fetchOTPs();
         }
     }, 3000);
 </script>
