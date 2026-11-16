@@ -49,6 +49,14 @@ bot2 = telebot.TeleBot(BOT_TOKEN_2)
 # ══════════════════════════════════════════════════════════
 IS_RUNNING = False
 CANCEL_FLAG = False
+WEB_LOGS = []
+WEB_STATE = {"total": 0, "success": 0, "current": 0}
+
+def add_web_log(msg, color="white"):
+    global WEB_LOGS
+    t = datetime.datetime.now().strftime("%H:%M:%S")
+    WEB_LOGS.append({"time": t, "msg": msg, "color": color})
+    if len(WEB_LOGS) > 100: WEB_LOGS.pop(0)
 
 # ══════════════════════════════════════════════════════════
 # PROXY MANAGER (Supabase)
@@ -57,72 +65,19 @@ def load_proxies():
     try:
         res = supabase.table("proxies").select("proxy_str").execute()
         return [item['proxy_str'] for item in res.data]
-    except:
+    except Exception as e:
+        print(f"Proxy Load Error: {e}")
         return []
 
-def get_random_proxy():
-    proxies = load_proxies()
-    if not proxies: return None
-    p = random.choice(proxies).split(':')
-    # Format: ip:port or ip:port:user:pass
-    if len(p) == 4: return {'http': f'http://{p[2]}:{p[3]}@{p[0]}:{p[1]}', 'https': f'http://{p[2]}:{p[3]}@{p[0]}:{p[1]}'}
-    elif len(p) == 2: return {'http': f'http://{p[0]}:{p[1]}', 'https': f'http://{p[0]}:{p[1]}'}
-    return None
-
 # ══════════════════════════════════════════════════════════
-# 50 ANDROID & 4 iOS USER-AGENTS
+# USER AGENTS
 # ══════════════════════════════════════════════════════════
 ANDROID_USER_AGENTS = [
     "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Mobile Safari/537.36",
     "Mozilla/5.0 (Linux; Android 14; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.6422.147 Mobile Safari/537.36",
     "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.113 Mobile Safari/537.36",
     "Mozilla/5.0 (Linux; Android 12; SM-A525F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.6312.118 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 11; M2101K6G) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.6261.119 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 10; SM-G973F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.6167.165 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.6478.122 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 13; CPH2447) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.6422.147 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 12; V2134) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.113 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 11; RMX3085) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.6312.118 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 10; Redmi Note 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.6261.119 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 14; SM-F946B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.6533.103 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 13; Pixel 6a) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.6478.122 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 12; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.6422.147 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 11; moto g(60)) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.113 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 10; Nokia G20) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.6312.118 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 14; SM-S928B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.6613.88 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 13; 2201117TG) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.6533.103 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 12; CPH2387) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.6478.122 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 11; V2307) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.6422.147 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 10; SM-A515F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.113 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 14; Pixel Fold) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.6668.81 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 13; SM-A546B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.6613.88 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 12; 23021RAAEG) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.6533.103 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 11; TECNO KE5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.6478.122 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 10; Infinix X6811) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.6422.147 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 14; SM-S911B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.6723.58 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 13; Pixel 7 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.6668.81 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 12; RMX3741) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.6613.88 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 11; CPH2499) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.6533.103 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 10; SM-M325F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.6478.122 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 14; SM-G996B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.39 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 13; 220333QNY) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.6723.58 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 12; V2225) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.6668.81 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 11; moto g84 5G) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.6613.88 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 10; Pixel 4a) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.6533.103 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 14; SM-A346E) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.6834.79 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 13; SM-S911U) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.39 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 12; Nokia X20) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.6723.58 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 11; Infinix X6837) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.6668.81 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 10; TECNO LH7n) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.6613.88 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.6943.42 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 13; SM-A145F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.6834.79 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 12; Redmi Note 11) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.39 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 11; CPH2461) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.6723.58 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 10; SM-A135F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.6668.81 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 14; SM-M515F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.6998.135 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 13; V2307) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.6943.42 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 12; RMX3630) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.6834.79 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 11; moto g(30)) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.39 Mobile Safari/537.36"
+    "Mozilla/5.0 (Linux; Android 11; M2101K6G) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.6261.119 Mobile Safari/537.36"
 ]
 
 IOS_USER_AGENTS = [
@@ -137,14 +92,6 @@ IOS_USER_AGENTS = [
 # ══════════════════════════════════════════════════════════
 app = Flask('')
 app.secret_key = "SOHAV_SECRET_KEY_123"
-WEB_LOGS = []
-WEB_STATE = {"total": 0, "success": 0, "current": 0}
-
-def add_web_log(msg, color="white"):
-    global WEB_LOGS
-    t = datetime.datetime.now().strftime("%H:%M:%S")
-    WEB_LOGS.append({"time": t, "msg": msg, "color": color})
-    if len(WEB_LOGS) > 100: WEB_LOGS.pop(0)
 
 # ══════════════════════════════════════════════════════════
 # CONSTANTS & FILES
@@ -214,7 +161,6 @@ def fetch_otp_from_hotmail(email_addr, refresh_token, client_id, chat_id=None):
                     if match:
                         code = match.group(1)
                         
-                        # Save to Supabase
                         try:
                             supabase.table("otps").insert({"email": email_addr, "code": code}).execute()
                         except Exception as e:
@@ -226,27 +172,6 @@ def fetch_otp_from_hotmail(email_addr, refresh_token, client_id, chat_id=None):
         except Exception:
             pass
 
-# ══════════════════════════════════════════════════════════
-# DOMAIN TO LANGUAGE MAP
-# ══════════════════════════════════════════════════════════
-DOMAIN_LANG_MAP = {
-    '.de': 'de', '.fr': 'fr', '.uk': 'gb', '.br': 'br', '.es': 'es', '.mx': 'mx',
-    '.it': 'it', '.ru': 'ru', '.in': 'in', '.pk': 'pk', '.bd': 'bd', '.id': 'id',
-    '.tr': 'tr', '.ph': 'ph', '.ng': 'ng', '.eg': 'eg', '.za': 'za', '.ca': 'ca',
-    '.au': 'au', '.nl': 'nl', '.pl': 'pl', '.se': 'se', '.vn': 'vn', '.th': 'th'
-}
-
-def get_lang_from_email(email_str):
-    email = email_str.split('|')[0].strip()
-    domain = email.split('@')[-1].lower() if '@' in email else ""
-    if domain.endswith('.com'): return None 
-    for tld, lang in DOMAIN_LANG_MAP.items():
-        if domain.endswith(tld): return lang
-    return None
-
-# ══════════════════════════════════════════════════════════
-# PROXY & CORE LOGIC
-# ══════════════════════════════════════════════════════════
 LANG_MAP = {
     'us': ('en-US,en;q=0.9', 'America/New_York'), 'gb': ('en-GB,en;q=0.9', 'Europe/London'),
     'de': ('de-DE,de;q=0.9,en;q=0.8', 'Europe/Berlin'), 'bd': ('bn-BD,bn;q=0.9,en;q=0.8', 'Asia/Dhaka'),
@@ -316,18 +241,17 @@ def warmup_session(session, fp, proxy):
         except: time.sleep(1)
     return collected, last_lsd
 
-def fb_create_account(email, password, lang_code, custom_fname, custom_lname, use_proxy, os_type):
+def fb_create_account(email, password, lang_code, custom_fname, custom_lname, proxy_dict, os_type):
     if CANCEL_FLAG: return (None, 'CANCELLED')
     session = cureq.Session()
-    proxy = get_random_proxy() if use_proxy else None
     
     fp = build_fingerprint(os_type)
-    cookies_warm, lsd_token = warmup_session(session, fp, proxy)
+    cookies_warm, lsd_token = warmup_session(session, fp, proxy_dict)
     time.sleep(random.uniform(2.0, 4.0))
 
     reg_fp = build_fingerprint(os_type)
     try:
-        r = session.get(f"{FB_REG_BASE}/reg/?cid=103", headers=reg_fp["headers"], impersonate=reg_fp["impersonate"], proxies=proxy, timeout=20)
+        r = session.get(f"{FB_REG_BASE}/reg/?cid=103", headers=reg_fp["headers"], impersonate=reg_fp["impersonate"], proxies=proxy_dict, timeout=20)
         m = re.search(r'"LSD",\[\],\{"token":"([^"]+)"', r.text)
         lsd = m.group(1) if m else lsd_token
         
@@ -356,9 +280,8 @@ def fb_create_account(email, password, lang_code, custom_fname, custom_lname, us
             'referer': f"{FB_REG_BASE}/reg/?cid=103", 'x-fb-lsd': lsd, "Cookie": build_cookie_header(cookies_warm)
         })
 
-        # Checkpoint Fix: Random delay before submit
         time.sleep(random.uniform(3.0, 6.0))
-        r = session.post(f"{FB_REG_BASE}/reg/submit/?app_id=103&multi_step_form=1", headers=headers, data=data, impersonate=reg_fp["impersonate"], proxies=proxy, timeout=30)
+        r = session.post(f"{FB_REG_BASE}/reg/submit/?app_id=103&multi_step_form=1", headers=headers, data=data, impersonate=reg_fp["impersonate"], proxies=proxy_dict, timeout=30)
     except Exception as e:
         return (None, f'POST_FAIL (Check Proxy/Net)')
 
@@ -366,7 +289,7 @@ def fb_create_account(email, password, lang_code, custom_fname, custom_lname, us
     uid = cookies.get('c_user')
     if uid:
         merged = dict(cookies_warm); merged.update(cookies)
-        return ({'firstname': firstname, 'lastname': lastname, 'email': email, 'password': password, 'uid': uid, 'cookie': build_cookie_header(merged), 'session': session, 'proxy': proxy}, None)
+        return ({'firstname': firstname, 'lastname': lastname, 'email': email, 'password': password, 'uid': uid, 'cookie': build_cookie_header(merged), 'session': session, 'proxy': proxy_dict}, None)
     
     body = r.text.lower()
     if 'checkpoint' in body: return (None, 'CHECKPOINT (Use Proxy / Change Email)')
@@ -396,6 +319,27 @@ def execute_batch(chat_id, email_data_list, password, lang, custom_name, use_pro
     success_count = 0; fail_count = 0
     WEB_STATE["total"] = len(email_data_list); WEB_STATE["success"] = 0
 
+    # --------------------------------------------------------
+    # PROXY ASSIGNMENT: 1 IP per Account (Unique)
+    # --------------------------------------------------------
+    proxies = load_proxies() if use_proxy else []
+    proxy_dicts = []
+    if use_proxy:
+        if not proxies:
+            if not is_web and chat_id:
+                bot1.send_message(chat_id, "⚠️ Proxies selected but database is empty!")
+            IS_RUNNING = False
+            return
+            
+        random.shuffle(proxies)
+        for i in range(len(email_data_list)):
+            p = proxies[i % len(proxies)].split(':')
+            if len(p) == 4: proxy_dicts.append({'http': f'http://{p[2]}:{p[3]}@{p[0]}:{p[1]}', 'https': f'http://{p[2]}:{p[3]}@{p[0]}:{p[1]}'})
+            elif len(p) == 2: proxy_dicts.append({'http': f'http://{p[0]}:{p[1]}', 'https': f'http://{p[0]}:{p[1]}'})
+            else: proxy_dicts.append(None)
+    else:
+        proxy_dicts = [None] * len(email_data_list)
+
     def process_one(item, idx, total):
         nonlocal success_count, fail_count
         if CANCEL_FLAG: return
@@ -403,11 +347,17 @@ def execute_batch(chat_id, email_data_list, password, lang, custom_name, use_pro
         email = item['email']; full_combo = item['full_combo']
         c_fname = custom_name[0] if custom_name else None; c_lname = custom_name[1] if custom_name else None
         
-        status_msg = None
-        if not is_web and chat_id: status_msg = bot1.send_message(chat_id, f"⏳ [{idx}/{total}] Processing: `{email}`", parse_mode='Markdown')
-        else: add_web_log(f"[{idx}/{total}] Processing: {email}", "cyan")
+        # Get the assigned proxy for this specific index
+        assigned_proxy = proxy_dicts[idx - 1]
+        proxy_ip = list(assigned_proxy.values())[0].split('@')[-1] if assigned_proxy else "Direct IP"
         
-        res, err = fb_create_account(email, password, lang, c_fname, c_lname, use_proxy, os_type)
+        status_msg = None
+        if not is_web and chat_id: 
+            status_msg = bot1.send_message(chat_id, f"⏳ [{idx}/{total}] Processing: `{email}`\n🔌 Proxy: `{proxy_ip}`", parse_mode='Markdown')
+        else: 
+            add_web_log(f"[{idx}/{total}] Processing: {email} (Proxy: {proxy_ip})", "cyan")
+        
+        res, err = fb_create_account(email, password, lang, c_fname, c_lname, assigned_proxy, os_type)
         
         if res:
             success_count += 1; WEB_STATE["success"] = success_count
@@ -423,7 +373,7 @@ def execute_batch(chat_id, email_data_list, password, lang, custom_name, use_pro
             except Exception as e:
                 print(f"Supabase Save Error: {e}")
             
-            msg_text = f"✅ **ACCOUNT CREATED!**\n\n📧 Email: `{email}`"
+            msg_text = f"✅ **ACCOUNT CREATED!**\n\n📧 Email: `{email}`\n🔌 Proxy: `{proxy_ip}`"
             
             if not is_web and chat_id: bot1.edit_message_text(msg_text, chat_id=chat_id, message_id=status_msg.message_id, parse_mode='Markdown')
             else: add_web_log(f"[+] SUCCESS: {email}", "green")
@@ -447,7 +397,7 @@ def execute_batch(chat_id, email_data_list, password, lang, custom_name, use_pro
             except Exception as e:
                 print(f"Supabase Error: {e}")
 
-            fail_text = f"❌ `{email}` Failed: {err}"
+            fail_text = f"❌ `{email}` Failed: {err}\n🔌 Proxy: `{proxy_ip}`"
             if not is_web and chat_id: bot1.edit_message_text(fail_text, chat_id=chat_id, message_id=status_msg.message_id, parse_mode='Markdown')
             else: add_web_log(fail_text, "red")
 
@@ -525,7 +475,6 @@ HTML_TEMPLATE = """
         .btn-row .btn.success { background: #10b981; }
         .btn-row .btn.failed { background: #ef4444; }
         
-        /* OTP Section */
         #otp-container { display: none; }
         .otp-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
         .otp-list-item { display: flex; justify-content: space-between; align-items: center; background: #0f172a; padding: 10px; border-radius: 8px; margin-bottom: 8px; border-left: 4px solid #10b981; }
@@ -548,13 +497,12 @@ HTML_TEMPLATE = """
 <body>
     <div class="header">
         <h1>🚀 Creator App</h1>
-        <span style="font-size:12px; color:#94a3b8;">v2.6</span>
+        <span style="font-size:12px; color:#94a3b8;">v2.7</span>
     </div>
     <div class="status-bar" id="status">Status: Idle</div>
 
     <div class="content">
         
-        <!-- OTP LIST SECTION (Hidden by default) -->
         <div id="otp-container">
             <div class="card">
                 <div class="otp-header">
@@ -565,7 +513,6 @@ HTML_TEMPLATE = """
             </div>
         </div>
 
-        <!-- MAIN FORM SECTION -->
         <div id="mainForm">
             <div class="card">
                 <label>Emails / Combos</label>
@@ -622,7 +569,6 @@ HTML_TEMPLATE = """
         </div>
     </div>
 
-    <!-- BOTTOM NAVIGATION BAR -->
     <div class="bottom-nav">
         <a href="#" class="nav-item active" id="nav-home" onclick="showHome(event)">🏠 Home</a>
         <a href="#" class="nav-item" id="nav-otp" onclick="showOTP(event)">📩 OTP List</a>
@@ -652,7 +598,7 @@ HTML_TEMPLATE = """
         document.getElementById('otp-container').classList.remove('hidden');
         document.getElementById('nav-otp').classList.add('active');
         document.getElementById('nav-home').classList.remove('active');
-        fetchOTPs(); // Refresh list immediately
+        fetchOTPs();
     }
 
     function copyCode(code) {
@@ -666,7 +612,7 @@ HTML_TEMPLATE = """
     async function deleteOTPs() {
         if(!confirm("Are you sure you want to delete all OTPs from database?")) return;
         await fetch('/api/delete_otps', { method: 'POST' });
-        fetchOTPs(); // Reload empty list
+        fetchOTPs();
     }
 
     async function fetchOTPs() {
@@ -753,7 +699,6 @@ HTML_TEMPLATE = """
             logsDiv.scrollTop = logsDiv.scrollHeight;
         }
 
-        // Check if OTP tab is active, then only update it
         const otpContainer = document.getElementById('otp-container');
         if (!otpContainer.classList.contains('hidden')) {
             fetchOTPs();
@@ -946,17 +891,26 @@ def save_proxy(message):
     lines = [l.strip() for l in message.text.split('\n') if ':' in l]
     
     if not lines:
-        return bot1.send_message(chat_id, "❌ No valid proxy found.")
+        return bot1.send_message(chat_id, "❌ No valid proxy found.\nFormat: ip:port or ip:port:user:pass")
         
     added = 0
+    failed = 0
+    last_err = ""
+    
     for line in lines:
         try:
             supabase.table("proxies").insert({"proxy_str": line}).execute()
             added += 1
-        except: pass
-        
+        except Exception as e:
+            failed += 1
+            last_err = str(e)
+            
     user_states[chat_id] = {}
-    bot1.send_message(chat_id, f"✅ Added {added} proxies to database.", reply_markup=get_main_menu_1(chat_id))
+    
+    if added > 0:
+        bot1.send_message(chat_id, f"✅ Added {added} proxies to database.\n{f'Failed: {failed}' if failed else ''}", reply_markup=get_main_menu_1(chat_id))
+    else:
+        bot1.send_message(chat_id, f"❌ Failed to add proxies.\nError: {last_err}", reply_markup=get_main_menu_1(chat_id))
 
 @bot1.message_handler(func=lambda message: message.text == '👀 View Proxies')
 def view_proxies(message):
@@ -1007,12 +961,9 @@ def handle_inputs(message):
                 
         if not email_data_list: return bot1.send_message(chat_id, "❌ Invalid format.")
         state['email_data_list'] = email_data_list
-        auto_lang = get_lang_from_email(email_data_list[0]['email'])
-        state['auto_lang'] = auto_lang
         state['step'] = 'os_mode'
         
         msg = f"✅ Got {len(email_data_list)} emails."
-        if auto_lang: msg += f"\n(Auto Language: {auto_lang.upper()})"
         
         markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
         markup.add('iOS', 'Android')
@@ -1082,15 +1033,15 @@ def handle_inputs(message):
             return bot1.send_message(chat_id, "Cancelled.", reply_markup=get_main_menu_1(chat_id))
         else:
             state['custom_name'] = None
-            if state.get('auto_lang'): state['lang'] = state['auto_lang']; start_batch_from_state(chat_id, state)
-            else: state['step'] = 'language'; show_languages(chat_id)
+            state['step'] = 'language'
+            show_languages(chat_id)
 
     elif state['step'] == 'custom_name':
         parts = message.text.strip().split(' ')
         if len(parts) < 2: return bot1.send_message(chat_id, "❌ Invalid format.")
         state['custom_name'] = (parts[0], " ".join(parts[1:]))
-        if state.get('auto_lang'): state['lang'] = state['auto_lang']; start_batch_from_state(chat_id, state)
-        else: state['step'] = 'language'; show_languages(chat_id)
+        state['step'] = 'language'
+        show_languages(chat_id)
 
     elif state['step'] == 'language':
         if 'Cancel' in message.text:
@@ -1236,5 +1187,5 @@ if __name__ == '__main__':
     t2.daemon = True
     t2.start()
 
-    print("App Server & Bots running with Supabase...")
+    print("App Server & Bots running with Supabase & Proxy...")
     bot1.infinity_polling()
