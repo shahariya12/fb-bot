@@ -51,6 +51,25 @@ IS_RUNNING = False
 CANCEL_FLAG = False
 
 # ══════════════════════════════════════════════════════════
+# PROXY MANAGER (Supabase)
+# ══════════════════════════════════════════════════════════
+def load_proxies():
+    try:
+        res = supabase.table("proxies").select("proxy_str").execute()
+        return [item['proxy_str'] for item in res.data]
+    except:
+        return []
+
+def get_random_proxy():
+    proxies = load_proxies()
+    if not proxies: return None
+    p = random.choice(proxies).split(':')
+    # Format: ip:port or ip:port:user:pass
+    if len(p) == 4: return {'http': f'http://{p[2]}:{p[3]}@{p[0]}:{p[1]}', 'https': f'http://{p[2]}:{p[3]}@{p[0]}:{p[1]}'}
+    elif len(p) == 2: return {'http': f'http://{p[0]}:{p[1]}', 'https': f'http://{p[0]}:{p[1]}'}
+    return None
+
+# ══════════════════════════════════════════════════════════
 # 50 ANDROID & 4 iOS USER-AGENTS
 # ══════════════════════════════════════════════════════════
 ANDROID_USER_AGENTS = [
@@ -132,7 +151,6 @@ def add_web_log(msg, color="white"):
 # ══════════════════════════════════════════════════════════
 FB_REG_BASE = "https://limited.facebook.com"
 GRAPHQL_URL = "https://web.facebook.com/api/graphql/"
-PROXY_FILE = "proxies.txt" 
 AUTH_FILE = "authorized_users.txt"
 
 def load_auth_users():
@@ -229,20 +247,6 @@ def get_lang_from_email(email_str):
 # ══════════════════════════════════════════════════════════
 # PROXY & CORE LOGIC
 # ══════════════════════════════════════════════════════════
-def load_proxies():
-    if os.path.exists(PROXY_FILE):
-        with open(PROXY_FILE, 'r') as f:
-            return [l.strip() for l in f if l.strip() and ':' in l]
-    return []
-
-def get_random_proxy():
-    proxies = load_proxies()
-    if not proxies: return None
-    p = random.choice(proxies).split(':')
-    if len(p) == 4: return {'http': f'http://{p[2]}:{p[3]}@{p[0]}:{p[1]}', 'https': f'http://{p[2]}:{p[3]}@{p[0]}:{p[1]}'}
-    elif len(p) == 2: return {'http': f'http://{p[0]}:{p[1]}', 'https': f'http://{p[0]}:{p[1]}'}
-    return None
-
 LANG_MAP = {
     'us': ('en-US,en;q=0.9', 'America/New_York'), 'gb': ('en-GB,en;q=0.9', 'Europe/London'),
     'de': ('de-DE,de;q=0.9,en;q=0.8', 'Europe/Berlin'), 'bd': ('bn-BD,bn;q=0.9,en;q=0.8', 'Asia/Dhaka'),
@@ -299,6 +303,7 @@ def build_cookie_header(cookies):
     return '; '.join(parts)
 
 def warmup_session(session, fp, proxy):
+    if CANCEL_FLAG: return {}, ""
     steps = ["https://www.facebook.com/", f"{FB_REG_BASE}/reg/?cid=103"]
     collected, last_lsd = {}, "AdS-QY2mYrCcHP7sVf7ynTA6vTc"
     for url in steps:
@@ -312,6 +317,7 @@ def warmup_session(session, fp, proxy):
     return collected, last_lsd
 
 def fb_create_account(email, password, lang_code, custom_fname, custom_lname, use_proxy, os_type):
+    if CANCEL_FLAG: return (None, 'CANCELLED')
     session = cureq.Session()
     proxy = get_random_proxy() if use_proxy else None
     
@@ -350,6 +356,7 @@ def fb_create_account(email, password, lang_code, custom_fname, custom_lname, us
             'referer': f"{FB_REG_BASE}/reg/?cid=103", 'x-fb-lsd': lsd, "Cookie": build_cookie_header(cookies_warm)
         })
 
+        # Checkpoint Fix: Random delay before submit
         time.sleep(random.uniform(3.0, 6.0))
         r = session.post(f"{FB_REG_BASE}/reg/submit/?app_id=103&multi_step_form=1", headers=headers, data=data, impersonate=reg_fp["impersonate"], proxies=proxy, timeout=30)
     except Exception as e:
@@ -405,7 +412,6 @@ def execute_batch(chat_id, email_data_list, password, lang, custom_name, use_pro
         if res:
             success_count += 1; WEB_STATE["success"] = success_count
             
-            # Save to Supabase
             try:
                 supabase.table("accounts").insert({
                     "email": email,
@@ -430,9 +436,9 @@ def execute_batch(chat_id, email_data_list, password, lang, custom_name, use_pro
                 client_id = combo_parts[3].strip()
                 threading.Thread(target=fetch_otp_from_hotmail, args=(email, refresh_token, client_id, chat_id if not is_web else None)).start()
         else:
+            if err == 'CANCELLED': return
             fail_count += 1
             
-            # Save to Supabase
             try:
                 supabase.table("failed_accounts").insert({
                     "full_combo": full_combo,
@@ -542,7 +548,7 @@ HTML_TEMPLATE = """
 <body>
     <div class="header">
         <h1>🚀 Creator App</h1>
-        <span style="font-size:12px; color:#94a3b8;">v2.5</span>
+        <span style="font-size:12px; color:#94a3b8;">v2.6</span>
     </div>
     <div class="status-bar" id="status">Status: Idle</div>
 
@@ -900,7 +906,8 @@ def get_main_menu_1(chat_id):
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add(KeyboardButton('🚀 Create Account'))
     if IS_RUNNING: markup.add(KeyboardButton('🛑 Stop Process'))
-    if str(chat_id) == ADMIN_ID: markup.add(KeyboardButton('⚙️ Admin Panel'))
+    if str(chat_id) == ADMIN_ID: 
+        markup.add(KeyboardButton('⚙️ Admin Panel'), KeyboardButton('🔌 Proxies'))
     return markup
 
 @bot1.message_handler(commands=['start'])
@@ -914,6 +921,66 @@ def stop_process(message):
     global CANCEL_FLAG
     CANCEL_FLAG = True
     bot1.send_message(message.chat.id, "🛑 **Stopping...**", reply_markup=ReplyKeyboardRemove())
+
+@bot1.message_handler(func=lambda message: message.text == '🔌 Proxies')
+def proxy_menu(message):
+    chat_id = message.chat.id
+    if str(chat_id) != ADMIN_ID: return
+    
+    markup = ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add(KeyboardButton('➕ Add Proxy'), KeyboardButton('👀 View Proxies'))
+    markup.add(KeyboardButton('🗑 Clear Proxies'), KeyboardButton('🔙 Back to Menu'))
+    
+    proxies = load_proxies()
+    bot1.send_message(chat_id, f"🔌 **Proxy Manager**\n\nTotal Proxies: `{len(proxies)}`\nSelect an option:", reply_markup=markup, parse_mode='Markdown')
+
+@bot1.message_handler(func=lambda message: message.text == '➕ Add Proxy')
+def add_proxy(message):
+    if str(message.chat.id) != ADMIN_ID: return
+    user_states[message.chat.id] = {'step': 'adding_proxy'}
+    bot1.send_message(message.chat.id, "📝 Paste proxies here (one per line).\nFormat: `ip:port` or `ip:port:user:pass`", parse_mode='Markdown', reply_markup=ReplyKeyboardRemove())
+
+@bot1.message_handler(func=lambda message: user_states.get(message.chat.id, {}).get('step') == 'adding_proxy')
+def save_proxy(message):
+    chat_id = message.chat.id
+    lines = [l.strip() for l in message.text.split('\n') if ':' in l]
+    
+    if not lines:
+        return bot1.send_message(chat_id, "❌ No valid proxy found.")
+        
+    added = 0
+    for line in lines:
+        try:
+            supabase.table("proxies").insert({"proxy_str": line}).execute()
+            added += 1
+        except: pass
+        
+    user_states[chat_id] = {}
+    bot1.send_message(chat_id, f"✅ Added {added} proxies to database.", reply_markup=get_main_menu_1(chat_id))
+
+@bot1.message_handler(func=lambda message: message.text == '👀 View Proxies')
+def view_proxies(message):
+    if str(message.chat.id) != ADMIN_ID: return
+    proxies = load_proxies()
+    if not proxies: return bot1.send_message(message.chat.id, "❌ No proxies found.")
+    
+    text = "🔌 **Proxies List:**\n\n" + "\n".join([f"`{p}`" for p in proxies[:20]])
+    if len(proxies) > 20: text += f"\n\n...and {len(proxies)-20} more."
+    bot1.send_message(message.chat.id, text, parse_mode='Markdown')
+
+@bot1.message_handler(func=lambda message: message.text == '🗑 Clear Proxies')
+def clear_proxies(message):
+    if str(message.chat.id) != ADMIN_ID: return
+    try:
+        supabase.table("proxies").delete().neq("id", 0).execute()
+        bot1.send_message(message.chat.id, "✅ All proxies deleted.")
+    except Exception as e:
+        bot1.send_message(message.chat.id, f"Error: {e}")
+
+@bot1.message_handler(func=lambda message: message.text == '🔙 Back to Menu')
+def back_to_menu(message):
+    user_states[message.chat.id] = {}
+    bot1.send_message(message.chat.id, "Main Menu:", reply_markup=get_main_menu_1(message.chat.id))
 
 @bot1.message_handler(commands=['create'])
 @bot1.message_handler(func=lambda message: message.text == '🚀 Create Account')
@@ -992,7 +1059,7 @@ def handle_inputs(message):
         choice = message.text
         if 'No Proxy' in choice: state['use_proxy'] = False; next_step = True
         elif 'Use Proxy' in choice:
-            if len(load_proxies()) == 0: return bot1.send_message(chat_id, "⚠️ No proxies found!")
+            if len(load_proxies()) == 0: return bot1.send_message(chat_id, "⚠️ No proxies found in database! Add from main menu.")
             state['use_proxy'] = True; next_step = True
         elif 'Cancel' in choice:
             del user_states[chat_id]
