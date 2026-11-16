@@ -26,7 +26,7 @@ except ImportError:
     exit()
 
 # ══════════════════════════════════════════════════════════
-# CONFIGURATIONS & DATABASE
+# CONFIG
 # ══════════════════════════════════════════════════════════
 BOT_TOKEN_1 = "9050767452:AAHto41auReAVjqJnzOeGKjbEW2Zue67oWQ"
 BOT_TOKEN_2 = "9141516064:AAEB9HzrjlTY0WVu3DLSw87ncOVfWRBKejg"
@@ -45,13 +45,14 @@ bot1 = telebot.TeleBot(BOT_TOKEN_1)
 bot2 = telebot.TeleBot(BOT_TOKEN_2)
 
 # ══════════════════════════════════════════════════════════
-# GLOBAL VARIABLES
+# GLOBALS
 # ══════════════════════════════════════════════════════════
 IS_RUNNING = False
-CANCEL_EVENT = threading.Event()   # responsive cancel
+CANCEL_EVENT = threading.Event()
 CURRENT_BATCH_ID = 0
+CURRENT_BATCH_NUMBER = None
 WEB_LOGS = []
-WEB_STATE = {"total": 0, "success": 0, "current": 0}
+WEB_STATE = {"total": 0, "success": 0, "current": 0, "batch_number": None}
 
 def add_web_log(msg, color="white"):
     global WEB_LOGS
@@ -59,9 +60,6 @@ def add_web_log(msg, color="white"):
     WEB_LOGS.append({"time": t, "msg": msg, "color": color})
     if len(WEB_LOGS) > 100: WEB_LOGS.pop(0)
 
-# ══════════════════════════════════════════════════════════
-# PROXY MANAGER (Supabase)
-# ══════════════════════════════════════════════════════════
 def load_proxies():
     try:
         res = supabase.table("proxies").select("proxy_str").execute()
@@ -69,6 +67,36 @@ def load_proxies():
     except Exception as e:
         print(f"Proxy Load Error: {e}")
         return []
+
+def get_next_batch_number():
+    """accurate max via order+limit, timestamp fallback — no collision."""
+    max_b = 0
+    for tbl in ("accounts", "failed_accounts"):
+        try:
+            res = supabase.table(tbl).select("batch_id").order("batch_id", desc=True).limit(1).execute()
+            if res.data and res.data[0].get('batch_id') is not None:
+                max_b = max(max_b, res.data[0]['batch_id'])
+        except Exception as e:
+            print(f"Batch fetch error ({tbl}): {e}")
+    if max_b > 0:
+        return max_b + 1
+    return int(time.time()) % 100000
+
+def fetch_all_rows(table, columns):
+    """paginated fetch — bypasses supabase 1000 row default limit."""
+    out = []
+    offset = 0
+    while True:
+        try:
+            r = supabase.table(table).select(columns).range(offset, offset + 999).execute()
+        except Exception as e:
+            print(f"Pagination error ({table}): {e}")
+            break
+        if not r.data: break
+        out.extend(r.data)
+        if len(r.data) < 1000: break
+        offset += 1000
+    return out
 
 # ══════════════════════════════════════════════════════════
 # USER AGENTS
@@ -80,7 +108,6 @@ ANDROID_USER_AGENTS = [
     "Mozilla/5.0 (Linux; Android 12; SM-A525F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.6312.118 Mobile Safari/537.36",
     "Mozilla/5.0 (Linux; Android 11; M2101K6G) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.6261.119 Mobile Safari/537.36"
 ]
-
 IOS_USER_AGENTS = [
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1",
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_1_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1",
@@ -89,14 +116,11 @@ IOS_USER_AGENTS = [
 ]
 
 # ══════════════════════════════════════════════════════════
-# FLASK WEB SERVER SETUP
+# FLASK SETUP
 # ══════════════════════════════════════════════════════════
 app = Flask('')
 app.secret_key = "SOHAV_SECRET_KEY_123"
 
-# ══════════════════════════════════════════════════════════
-# CONSTANTS & FILES
-# ══════════════════════════════════════════════════════════
 FB_REG_BASE = "https://limited.facebook.com"
 GRAPHQL_URL = "https://web.facebook.com/api/graphql/"
 AUTH_FILE = "authorized_users.txt"
@@ -124,60 +148,39 @@ def is_authorized(chat_id):
     return str(chat_id) in load_auth_users()
 
 # ══════════════════════════════════════════════════════════
-# MANUAL READER VIA API (dongvanfb.net)
+# MANUAL READER API
 # ══════════════════════════════════════════════════════════
 def get_code_via_api(combo, code_type="facebook"):
     try:
         parts = combo.split('|')
         if len(parts) < 4:
             return None, "Invalid combo (need 4 parts)"
-
-        email = parts[0].strip()
-        refresh_token = parts[2].strip()
-        client_id = parts[3].strip()
-
         payload = {
-            "email": email,
-            "refresh_token": refresh_token,
-            "client_id": client_id,
+            "email": parts[0].strip(),
+            "refresh_token": parts[2].strip(),
+            "client_id": parts[3].strip(),
             "type": code_type
         }
-
-        headers = {
-            "Content-Type": "application/json",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-        }
-
-        res = requests.post(
-            "https://tools.dongvanfb.net/api/get_code_oauth2",
-            json=payload, headers=headers, timeout=10
-        )
-
+        headers = {"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"}
+        res = requests.post("https://tools.dongvanfb.net/api/get_code_oauth2", json=payload, headers=headers, timeout=10)
         if res.status_code == 200:
-            res_json = res.json()
-            if res_json.get("status") is True and "code" in res_json:
-                return res_json["code"], None
-            else:
-                msg = res_json.get("message", res_json.get("content", "No code found"))
-                return None, str(msg)
+            rj = res.json()
+            if rj.get("status") is True and "code" in rj:
+                return rj["code"], None
+            return None, str(rj.get("message", rj.get("content", "No code found")))
         return None, f"API Error: {res.status_code}"
     except Exception as e:
         return None, str(e)
 
 # ══════════════════════════════════════════════════════════
-# AUTO OTP FETCHER — 2 HOURS, INSTANT CANCEL
+# AUTO OTP FETCHER (2 HOURS)
 # ══════════════════════════════════════════════════════════
 def fetch_otp_from_hotmail(email_addr, full_combo, chat_id=None):
-    MAX_WAIT_SECONDS = 2 * 60 * 60   # 2 hours wall clock
-    deadline = time.time() + MAX_WAIT_SECONDS
-
+    deadline = time.time() + (2 * 60 * 60)
     while time.time() < deadline:
-        # wakes IMMEDIATELY on CANCEL_EVENT.set() — no 5s block
         if CANCEL_EVENT.wait(timeout=5):
             return
-
         code, error = get_code_via_api(full_combo, code_type="facebook")
-
         if code:
             try:
                 supabase.table("otps").insert({"email": email_addr, "code": code}).execute()
@@ -185,13 +188,8 @@ def fetch_otp_from_hotmail(email_addr, full_combo, chat_id=None):
                 print(f"Supabase OTP Error: {e}")
             if chat_id:
                 try:
-                    bot1.send_message(
-                        chat_id,
-                        f"📩 **AUTO OTP FOUND for `{email_addr}`**\n\n🔑 Code: `{code}`",
-                        parse_mode='Markdown'
-                    )
-                except Exception:
-                    pass
+                    bot1.send_message(chat_id, f"📩 **AUTO OTP for `{email_addr}`**\n\n🔑 `{code}`", parse_mode='Markdown')
+                except: pass
             return
 
 LANG_MAP = {
@@ -211,7 +209,6 @@ LANG_MAP = {
 }
 CURRENT_LANG_HEADER = "en-US,en;q=0.9"
 
-# NAME LISTS
 DEFAULT_FIRST_NAMES = ['Arafat', 'Rakib', 'Sabbir', 'Nayeem', 'Rifat', 'Tanvir', 'Shakib', 'Sajid', 'John', 'David', 'Michael', 'James']
 DEFAULT_LAST_NAMES = ['Hossain', 'Ahmed', 'Khan', 'Islam', 'Rahman', 'Sarker', 'Smith', 'Johnson', 'Williams', 'Brown']
 GERMAN_FIRST_NAMES = ["Alexander", "Andreas", "Anna", "Anja", "Anke", "Anton", "Armin", "Axel", "Barbara", "Bastian", "Benedikt", "Benjamin", "Bernd", "Birgit", "Björn", "Brigitte", "Bruno", "Carina", "Carla", "Charlotte", "Christian", "Christina", "Christof", "Claudia", "Claus", "Cornelia", "Daniel", "Daniela", "David", "Dennis"]
@@ -225,17 +222,13 @@ SCREEN_PROFILES = [(390, 844, 3.0), (393, 852, 3.0), (428, 926, 3.0), (430, 932,
 
 def build_fingerprint(os_type="ios"):
     if os_type == "android":
-        ua = random.choice(ANDROID_USER_AGENTS)
-        impersonate = "chrome120"
+        ua = random.choice(ANDROID_USER_AGENTS); imp = "chrome120"
     else:
-        ua = random.choice(IOS_USER_AGENTS)
-        impersonate = "safari15_5"
-
-    sw, sh, dpr = random.choice(SCREEN_PROFILES)
-    pringer_hash = hashlib.sha256(f"{ua}-{sw}x{sh}-{uuid.uuid4()}".encode()).hexdigest()[:32]
-
+        ua = random.choice(IOS_USER_AGENTS); imp = "safari15_5"
+    sw, sh, _ = random.choice(SCREEN_PROFILES)
     return {
-        "impersonate": impersonate, "pringer": pringer_hash,
+        "impersonate": imp,
+        "pringer": hashlib.sha256(f"{ua}-{sw}x{sh}-{uuid.uuid4()}".encode()).hexdigest()[:32],
         "headers": {
             "User-Agent": ua, "Accept-Language": CURRENT_LANG_HEADER,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -257,9 +250,7 @@ def warmup_session(session, fp, proxy):
         if CANCEL_EVENT.is_set(): return {}, ""
         try:
             r = session.get(url, headers=fp["headers"], impersonate=fp["impersonate"], proxies=proxy, timeout=10)
-            # responsive sleep — instant wake on cancel
-            if CANCEL_EVENT.wait(timeout=random.uniform(1.5, 3.5)):
-                return {}, ""
+            if CANCEL_EVENT.wait(timeout=random.uniform(1.5, 3.5)): return {}, ""
             collected.update(session.cookies.get_dict())
             m = re.search(r'"LSD",\[\],\{"token":"([^"]+)"', r.text)
             if m: last_lsd = m.group(1)
@@ -270,11 +261,9 @@ def warmup_session(session, fp, proxy):
 def fb_create_account(email, password, lang_code, custom_fname, custom_lname, proxy_dict, os_type):
     if CANCEL_EVENT.is_set(): return (None, 'CANCELLED')
     session = cureq.Session()
-
     fp = build_fingerprint(os_type)
     cookies_warm, lsd_token = warmup_session(session, fp, proxy_dict)
     if CANCEL_EVENT.is_set(): return (None, 'CANCELLED')
-
     if CANCEL_EVENT.wait(timeout=random.uniform(2.0, 4.0)):
         return (None, 'CANCELLED')
 
@@ -293,38 +282,40 @@ def fb_create_account(email, password, lang_code, custom_fname, custom_lname, pr
         data = {
             'ccp': '2', 'reg_instance': str(uuid.uuid4()).replace('-', '')[:24],
             'submission_request': 'true', 'reg_impression_id': str(uuid.uuid4()),
-            'field_names[0]': 'firstname', 'firstname': firstname,
-            'lastname': lastname, 'field_names[1]': 'birthday_wrapper',
+            'field_names[0]': 'firstname', 'firstname': firstname, 'lastname': lastname,
+            'field_names[1]': 'birthday_wrapper',
             'birthday_day': str(random.randint(1, 28)), 'birthday_month': str(random.randint(1, 12)), 'birthday_year': str(random.randint(1995, 2005)),
             'field_names[2]': 'reg_email__', 'reg_email__': email,
             'field_names[3]': 'sex', 'sex': str(random.choice(['1', '2'])),
             'field_names[4]': 'reg_passwd__', 'reg_passwd__': password,
             'submit': 'Sign up', 'lsd': lsd, 'jazoest': '24979', '__req': '7', '__fmt': '1',
         }
-
         headers = dict(reg_fp["headers"])
         headers.update({
             'Content-Type': 'application/x-www-form-urlencoded', 'x-response-format': 'JSONStream',
             'x-asbd-id': '359341', 'x-requested-with': 'XMLHttpRequest', 'origin': FB_REG_BASE,
-            'referer': f"{FB_REG_BASE}/reg/?cid=103", 'x-fb-lsd': lsd, "Cookie": build_cookie_header(cookies_warm)
+            'referer': f"{FB_REG_BASE}/reg/?cid=103", 'x-fb-lsd': lsd,
+            "Cookie": build_cookie_header(cookies_warm)
         })
-
         if CANCEL_EVENT.wait(timeout=random.uniform(3.0, 6.0)):
             return (None, 'CANCELLED')
-
-        r = session.post(f"{FB_REG_BASE}/reg/submit/?app_id=103&multi_step_form=1", headers=headers, data=data, impersonate=reg_fp["impersonate"], proxies=proxy_dict, timeout=30)
-    except Exception as e:
-        return (None, f'POST_FAIL (Check Proxy/Net)')
+        r = session.post(f"{FB_REG_BASE}/reg/submit/?app_id=103&multi_step_form=1",
+                         headers=headers, data=data, impersonate=reg_fp["impersonate"], proxies=proxy_dict, timeout=30)
+    except:
+        return (None, 'POST_FAIL')
 
     cookies = session.cookies.get_dict()
     uid = cookies.get('c_user')
     if uid:
         merged = dict(cookies_warm); merged.update(cookies)
-        return ({'firstname': firstname, 'lastname': lastname, 'email': email, 'password': password, 'uid': uid, 'cookie': build_cookie_header(merged), 'session': session, 'proxy': proxy_dict}, None)
-
+        return ({
+            'firstname': firstname, 'lastname': lastname, 'email': email,
+            'password': password, 'uid': uid,
+            'cookie': build_cookie_header(merged), 'session': session, 'proxy': proxy_dict
+        }, None)
     body = r.text.lower()
-    if 'checkpoint' in body: return (None, 'CHECKPOINT (Use Proxy / Change Email)')
-    if 'already' in body: return (None, 'TAKEN (Email exists)')
+    if 'checkpoint' in body: return (None, 'CHECKPOINT')
+    if 'already' in body: return (None, 'TAKEN')
     return (None, 'FAILED')
 
 def resend_otp(session, uid, proxy):
@@ -334,29 +325,32 @@ def resend_otp(session, uid, proxy):
         lsd = lsd.group(1) if lsd else ""
         dtsg = re.search(r'"DTSGInitialData",\[\],\{"token":"([^"]+)"', r.text) or re.search(r'name="fb_dtsg"\s+value="([^"]+)"', r.text)
         fb_dtsg = dtsg.group(1) if dtsg else ""
-
         if not lsd or not fb_dtsg: return False
         headers = {'host': 'web.facebook.com', 'content-type': 'application/x-www-form-urlencoded', 'x-fb-lsd': lsd, 'origin': 'https://web.facebook.com'}
         variables = json.dumps({"input": {"actor_id": str(uid), "client_mutation_id": str(uuid.uuid4()), "machine_id": ""}}, separators=(',', ':'))
         data = {'av': str(uid), '__user': str(uid), 'fb_dtsg': fb_dtsg, 'lsd': lsd, 'variables': variables, 'doc_id': '9554972464608847'}
         res = session.post(GRAPHQL_URL, headers=headers, data=data, proxies=proxy, timeout=15)
         return (res.status_code == 200 and "errors" not in res.text)
-    except Exception: return False
+    except: return False
 
+# ══════════════════════════════════════════════════════════
+# BATCH EXECUTION
+# ══════════════════════════════════════════════════════════
 def execute_batch(chat_id, email_data_list, password, lang, custom_name, hotmail_name, use_proxy, os_type, is_web=False):
-    global IS_RUNNING, WEB_STATE, CURRENT_BATCH_ID
+    global IS_RUNNING, WEB_STATE, CURRENT_BATCH_ID, CURRENT_BATCH_NUMBER
 
     CURRENT_BATCH_ID += 1
     my_batch_id = CURRENT_BATCH_ID
+    my_batch_number = get_next_batch_number()
+    CURRENT_BATCH_NUMBER = my_batch_number
 
     IS_RUNNING = True
-    CANCEL_EVENT.clear()        # reset for this batch
+    CANCEL_EVENT.clear()
     success_count = 0; fail_count = 0
-    WEB_STATE["total"] = len(email_data_list); WEB_STATE["success"] = 0
+    WEB_STATE["total"] = len(email_data_list)
+    WEB_STATE["success"] = 0
+    WEB_STATE["batch_number"] = my_batch_number
 
-    # --------------------------------------------------------
-    # PROXY ASSIGNMENT: 1 IP per Account (Unique)
-    # --------------------------------------------------------
     proxies = load_proxies() if use_proxy else []
     proxy_dicts = []
     if use_proxy:
@@ -365,7 +359,6 @@ def execute_batch(chat_id, email_data_list, password, lang, custom_name, hotmail
                 bot1.send_message(chat_id, "⚠️ Proxies selected but database is empty!")
             IS_RUNNING = False
             return
-
         random.shuffle(proxies)
         for i in range(len(email_data_list)):
             p = proxies[i % len(proxies)].split(':')
@@ -386,118 +379,109 @@ def execute_batch(chat_id, email_data_list, password, lang, custom_name, hotmail
         WEB_STATE["current"] = idx
         email = item['email']; full_combo = item['full_combo']
 
-        is_hotmail = any(domain in email.lower() for domain in ["@hotmail.", "@outlook.", "@live.", "@msn."])
-
+        is_hotmail = any(d in email.lower() for d in ["@hotmail.", "@outlook.", "@live.", "@msn."])
         c_fname, c_lname = None, None
         if is_hotmail and hotmail_name:
-            parts = hotmail_name.split(' ', 1)
-            c_fname = parts[0]
-            c_lname = parts[1] if len(parts) > 1 else "User"
+            p = hotmail_name.split(' ', 1); c_fname = p[0]; c_lname = p[1] if len(p) > 1 else "User"
         elif not is_hotmail and custom_name:
-            parts = custom_name.split(' ', 1)
-            c_fname = parts[0]
-            c_lname = parts[1] if len(parts) > 1 else "User"
+            p = custom_name.split(' ', 1); c_fname = p[0]; c_lname = p[1] if len(p) > 1 else "User"
 
         assigned_proxy = proxy_dicts[idx - 1]
         proxy_ip = list(assigned_proxy.values())[0].split('@')[-1] if assigned_proxy else "Direct IP"
 
         status_msg = None
         if not is_web and chat_id:
-            status_msg = bot1.send_message(chat_id, f"⏳ [{idx}/{total}] Processing: `{email}`\n🔌 Proxy: `{proxy_ip}`", parse_mode='Markdown')
+            status_msg = bot1.send_message(chat_id, f"⏳ [{idx}/{total}] B#{my_batch_number}: `{email}`\n🔌 `{proxy_ip}`", parse_mode='Markdown')
         else:
-            add_web_log(f"[{idx}/{total}] Processing: {email} (Proxy: {proxy_ip})", "cyan")
+            add_web_log(f"[B{my_batch_number}][{idx}/{total}] {email} (Proxy: {proxy_ip})", "cyan")
 
         res, err = fb_create_account(email, password, lang, c_fname, c_lname, assigned_proxy, os_type)
-
         if CANCEL_EVENT.is_set() or my_batch_id != CURRENT_BATCH_ID: return
 
         if res:
             success_count += 1; WEB_STATE["success"] = success_count
-
             try:
                 supabase.table("accounts").insert({
-                    "email": email,
-                    "password": password,
-                    "uid": res['uid'],
-                    "cookie": res['cookie'],
-                    "full_combo": full_combo
+                    "email": email, "password": password, "uid": res['uid'],
+                    "cookie": res['cookie'], "full_combo": full_combo,
+                    "batch_id": my_batch_number
                 }).execute()
             except Exception as e:
                 print(f"Supabase Save Error: {e}")
 
-            msg_text = f"✅ **ACCOUNT CREATED!**\n\n📧 Email: `{email}`\n🔌 Proxy: `{proxy_ip}`"
-
-            if not is_web and chat_id: bot1.edit_message_text(msg_text, chat_id=chat_id, message_id=status_msg.message_id, parse_mode='Markdown')
-            else: add_web_log(f"[+] SUCCESS: {email}", "green")
+            msg_text = f"✅ **SUCCESS** (B#{my_batch_number})\n📧 `{email}`\n🔌 `{proxy_ip}`"
+            if not is_web and chat_id:
+                bot1.edit_message_text(msg_text, chat_id=chat_id, message_id=status_msg.message_id, parse_mode='Markdown')
+            else:
+                add_web_log(f"[+] B{my_batch_number} SUCCESS: {email}", "green")
 
             resend_otp(res['session'], res['uid'], res['proxy'])
-
             threading.Thread(target=fetch_otp_from_hotmail, args=(email, full_combo, chat_id if not is_web else None)).start()
         else:
             if err == 'CANCELLED': return
             fail_count += 1
-
             try:
                 supabase.table("failed_accounts").insert({
-                    "full_combo": full_combo,
-                    "reason": err
+                    "full_combo": full_combo, "reason": err, "batch_id": my_batch_number
                 }).execute()
             except Exception as e:
                 print(f"Supabase Error: {e}")
 
-            fail_text = f"❌ `{email}` Failed: {err}\n🔌 Proxy: `{proxy_ip}`"
-            if not is_web and chat_id: bot1.edit_message_text(fail_text, chat_id=chat_id, message_id=status_msg.message_id, parse_mode='Markdown')
-            else: add_web_log(fail_text, "red")
+            fail_text = f"❌ `{email}` Failed: {err} (B#{my_batch_number})\n🔌 `{proxy_ip}`"
+            if not is_web and chat_id:
+                bot1.edit_message_text(fail_text, chat_id=chat_id, message_id=status_msg.message_id, parse_mode='Markdown')
+            else:
+                add_web_log(fail_text, "red")
 
     with ThreadPoolExecutor(max_workers=len(email_data_list)) as executor:
         futures = [executor.submit(process_one, item, i+1, len(email_data_list)) for i, item in enumerate(email_data_list)]
         for future in futures: future.result()
 
-    if my_batch_id != CURRENT_BATCH_ID:
-        return
+    if my_batch_id != CURRENT_BATCH_ID: return
 
     IS_RUNNING = False
     if CANCEL_EVENT.is_set():
-        finish_msg = f"🛑 **Batch Cancelled!**\n\n✅ Total Success: {success_count}\n❌ Total Failed: {fail_count}"
+        finish_msg = f"🛑 **Batch #{my_batch_number} Cancelled!**\n✅ Success: {success_count}\n❌ Failed: {fail_count}"
     else:
-        finish_msg = f"🎉 **Batch Finished!**\n\n✅ Total Success: {success_count}\n❌ Total Failed: {fail_count}\n\n👉 _Type /start to open menu again._"
+        finish_msg = f"🎉 **Batch #{my_batch_number} Finished!**\n✅ Success: {success_count}\n❌ Failed: {fail_count}\n\n👉 _/start to open menu_"
 
     if not is_web and chat_id:
         bot1.send_message(chat_id, finish_msg, parse_mode='Markdown', reply_markup=get_main_menu_1(chat_id))
     else:
-        add_web_log(f"Finished! Success: {success_count}, Failed: {fail_count}", "yellow")
+        add_web_log(f"Finished! B#{my_batch_number} — Success: {success_count}, Failed: {fail_count}", "yellow")
 
 # ══════════════════════════════════════════════════════════
-# WEB DASHBOARD
+# CSV HELPERS
+# ══════════════════════════════════════════════════════════
+def _write_csv(header, rows):
+    output = io.StringIO()
+    writer = csv.writer(output, quoting=csv.QUOTE_ALL)
+    writer.writerow(header)
+    for row in rows: writer.writerow(row)
+    mem = io.BytesIO()
+    mem.write(output.getvalue().encode('utf-8'))
+    mem.seek(0)
+    return mem
+
+# ══════════════════════════════════════════════════════════
+# WEB TEMPLATES
 # ══════════════════════════════════════════════════════════
 LOGIN_TEMPLATE = """
 <!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>SOHAV App Login</title>
-    <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background: #0f172a; color: white; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; }
-        .card { background: #1e293b; padding: 30px 20px; border-radius: 16px; width: 100%; max-width: 350px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); text-align: center; }
-        h2 { margin-top: 0; color: #38bdf8; font-size: 24px; }
-        input { width: 100%; padding: 14px; margin: 15px 0; background: #0f172a; border: 1px solid #334155; border-radius: 10px; color: white; font-size: 16px; box-sizing: border-box; }
-        button { width: 100%; padding: 14px; background: #0ea5e9; color: white; border: none; border-radius: 10px; font-weight: bold; font-size: 16px; cursor: pointer; }
-        button:active { background: #0284c7; }
-        .error { color: #f87171; font-size: 14px; margin-top: 10px; }
-    </style>
-</head>
-<body>
-    <div class="card">
-        <h2>🔒 Login</h2>
-        <form method="POST">
-            <input type="password" name="password" placeholder="Enter Password" required>
-            <button type="submit">Unlock App</button>
-        </form>
-        {% if error %}<p class="error">{{ error }}</p>{% endif %}
-    </div>
-</body>
-</html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Login</title>
+<style>
+body { font-family: -apple-system, sans-serif; background: #0f172a; color: white; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; }
+.card { background: #1e293b; padding: 30px 20px; border-radius: 16px; width: 100%; max-width: 350px; text-align: center; }
+h2 { margin-top: 0; color: #38bdf8; }
+input { width: 100%; padding: 14px; margin: 15px 0; background: #0f172a; border: 1px solid #334155; border-radius: 10px; color: white; font-size: 16px; box-sizing: border-box; }
+button { width: 100%; padding: 14px; background: #0ea5e9; color: white; border: none; border-radius: 10px; font-weight: bold; font-size: 16px; cursor: pointer; }
+.error { color: #f87171; margin-top: 10px; }
+</style></head><body>
+<div class="card"><h2>🔒 Login</h2>
+<form method="POST"><input type="password" name="password" placeholder="Password" required><button>Unlock</button></form>
+{% if error %}<p class="error">{{ error }}</p>{% endif %}</div>
+</body></html>
 """
 
 HTML_TEMPLATE = """
@@ -506,14 +490,13 @@ HTML_TEMPLATE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <meta name="theme-color" content="#0f172a">
     <title>SOHAV Creator App</title>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; padding-bottom: 80px; }
-        .header { background: #1e293b; padding: 15px 20px; position: sticky; top: 0; z-index: 100; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }
+        .header { background: #1e293b; padding: 15px 20px; position: sticky; top: 0; z-index: 100; display: flex; justify-content: space-between; align-items: center; }
         .header h1 { font-size: 18px; margin: 0; color: #38bdf8; }
         .header button { background: none; border: none; color: #38bdf8; font-size: 20px; cursor: pointer; }
-        .status-bar { padding: 10px 20px; font-size: 13px; font-weight: bold; text-align: center; background: #334155; color: white; transition: background 0.3s; }
+        .status-bar { padding: 10px 20px; font-size: 13px; font-weight: bold; text-align: center; background: #334155; }
         .content { padding: 20px; }
         .card { background: #1e293b; padding: 15px; border-radius: 12px; margin-bottom: 15px; }
         label { display: block; font-size: 13px; color: #94a3b8; margin-bottom: 8px; font-weight: 600; }
@@ -521,289 +504,185 @@ HTML_TEMPLATE = """
         textarea { resize: vertical; min-height: 100px; }
         .btn { width: 100%; padding: 14px; background: #0ea5e9; color: white; border: none; border-radius: 10px; font-weight: bold; font-size: 16px; cursor: pointer; }
         .btn.stop { background: #ef4444; display: none; }
-        .btn.refresh { background: #6366f1; margin-top: 10px; }
         .btn:active { opacity: 0.8; }
         .btn-row { display: flex; gap: 10px; margin-top: 10px; }
-        .btn-row .btn { flex: 1; font-size: 14px; padding: 12px; }
+        .btn-row .btn { flex: 1; font-size: 13px; padding: 10px; }
         .btn-row .btn.success { background: #10b981; }
         .btn-row .btn.failed { background: #ef4444; }
-
         #otp-container { display: none; }
-        .otp-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
         .otp-list-item { display: flex; justify-content: space-between; align-items: center; background: #0f172a; padding: 10px; border-radius: 8px; margin-bottom: 8px; border-left: 4px solid #10b981; }
         .otp-code { font-family: monospace; font-size: 18px; font-weight: bold; color: #4ade80; letter-spacing: 2px; }
         .otp-email { font-size: 11px; color: #94a3b8; display: block; margin-bottom: 4px; }
         .copy-btn { background: #0ea5e9; color: white; border: none; border-radius: 6px; padding: 6px 12px; font-size: 12px; font-weight: bold; cursor: pointer; }
-        .copy-btn:active { background: #0284c7; }
         .del-btn { background: #ef4444; color: white; border: none; border-radius: 6px; padding: 6px 12px; font-size: 12px; font-weight: bold; cursor: pointer; }
-
         #logs { background: #000; height: 200px; overflow-y: auto; padding: 10px; border-radius: 8px; font-family: monospace; font-size: 12px; border: 1px solid #334155; margin-top: 15px; color: #ccc; }
-        .log-line { margin-bottom: 4px; }
         .cyan { color: #22d3ee; } .green { color: #4ade80; } .red { color: #f87171; } .yellow { color: #fbbf24; } .white { color: #e2e8f0; }
-
-        .bottom-nav { position: fixed; bottom: 0; width: 100%; background: #1e293b; display: flex; border-top: 1px solid #334155; padding-bottom: env(safe-area-inset-bottom); }
+        .batch-item { background: #0f172a; padding: 10px; border-radius: 8px; margin-bottom: 8px; border-left: 4px solid #0ea5e9; }
+        .batch-item.old { border-left-color: #f59e0b; }
+        .batch-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+        .batch-num { font-weight: bold; color: #38bdf8; }
+        .batch-num.old { color: #f59e0b; }
+        .batch-counts { font-size: 11px; color: #94a3b8; }
+        .bottom-nav { position: fixed; bottom: 0; width: 100%; background: #1e293b; display: flex; border-top: 1px solid #334155; }
         .nav-item { flex: 1; text-align: center; padding: 15px 0; color: #94a3b8; font-size: 12px; text-decoration: none; font-weight: bold; }
         .nav-item.active { color: #0ea5e9; }
         .hidden { display: none !important; }
     </style>
 </head>
 <body>
-    <div class="header">
-        <h1>🚀 Creator App</h1>
-        <button onclick="window.location.reload()">🔄</button>
-    </div>
+    <div class="header"><h1>🚀 Creator App</h1><button onclick="window.location.reload()">🔄</button></div>
     <div class="status-bar" id="status">Status: Idle</div>
-
     <div class="content">
-
         <div id="otp-container">
             <div class="card">
-                <div class="otp-header">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
                     <label style="color:#4ade80; margin-bottom:0;">📩 Recent OTPs</label>
                     <button class="del-btn" onclick="deleteOTPs()">🗑 Delete All</button>
                 </div>
                 <div id="otp-list"></div>
             </div>
         </div>
-
         <div id="mainForm">
             <div class="card">
                 <label>Emails / Combos</label>
                 <textarea id="emails" placeholder="email|password|refresh_token|client_id"></textarea>
-
                 <label>OS Mode</label>
-                <select id="osMode">
-                    <option value="ios">iOS (Safari)</option>
-                    <option value="android">Android (Chrome)</option>
-                </select>
-
+                <select id="osMode"><option value="ios">iOS (Safari)</option><option value="android">Android (Chrome)</option></select>
                 <label>Password Mode</label>
-                <select id="passMode" onchange="togglePass()">
-                    <option value="fix">Fix Password (SOHAVdd)</option>
-                    <option value="custom">Custom Password</option>
-                </select>
-                <input type="text" id="customPass" placeholder="Enter Custom Password" style="display:none;">
-
+                <select id="passMode" onchange="togglePass()"><option value="fix">Fix Password (SOHAVdd)</option><option value="custom">Custom Password</option></select>
+                <input type="text" id="customPass" placeholder="Custom Password" style="display:none;">
                 <label>Proxy Mode</label>
-                <select id="proxyMode">
-                    <option value="no">No Proxy (Direct)</option>
-                    <option value="yes">Use Proxy (Auto)</option>
-                </select>
-
-                <label>Name Mode (.com Emails)</label>
-                <select id="nameMode" onchange="toggleName()">
-                    <option value="auto">Auto Name (Language)</option>
-                    <option value="custom">Custom Name</option>
-                </select>
+                <select id="proxyMode"><option value="no">No Proxy</option><option value="yes">Use Proxy</option></select>
+                <label>Name Mode (.com)</label>
+                <select id="nameMode" onchange="toggleName()"><option value="auto">Auto Name</option><option value="custom">Custom Name</option></select>
                 <input type="text" id="customName" placeholder="Firstname Lastname" style="display:none;">
-
-                <label>Hotmail Reader Name (Optional)</label>
-                <input type="text" id="hotmailName" placeholder="Firstname Lastname (Empty = Auto)">
-
+                <label>Hotmail Reader Name</label>
+                <input type="text" id="hotmailName" placeholder="Firstname Lastname (optional)">
                 <label>Language</label>
-                <select id="lang">
-                    <option value="de">German (DE)</option>
-                    <option value="fr">French (FR)</option>
-                    <option value="br">Portuguese (BR)</option>
-                    <option value="us">English (US)</option>
-                </select>
-
-                <button class="btn" id="startBtn" onclick="startBatch()">▶ START PROCESS</button>
-                <button class="btn stop" id="stopBtn" onclick="stopBatch()">🛑 STOP PROCESS</button>
-                <button class="btn refresh" onclick="window.location.reload()">🔄 Refresh Page</button>
+                <select id="lang"><option value="de">German</option><option value="fr">French</option><option value="br">Portuguese</option><option value="us">English</option></select>
+                <button class="btn" id="startBtn" onclick="startBatch()">▶ START</button>
+                <button class="btn stop" id="stopBtn" onclick="stopBatch()">🛑 STOP</button>
             </div>
-
             <div class="card">
-                <label>Downloads (From Cloud)</label>
-                <div class="btn-row">
-                    <a href="/download/success" class="btn success" style="text-decoration:none; text-align:center;">📁 Success CSV</a>
-                    <a href="/download/failed" class="btn failed" style="text-decoration:none; text-align:center;">❌ Failed CSV</a>
+                <label>📦 Batch Downloads</label>
+                <div id="batchList" style="max-height: 400px; overflow-y: auto;">
+                    <p style="color:#94a3b8; font-size:12px;">Loading...</p>
                 </div>
             </div>
-
-            <label style="margin-top:10px;">Live Logs</label>
+            <div class="card">
+                <label>📥 Download ALL</label>
+                <div class="btn-row">
+                    <a href="/download/success" class="btn success" style="text-decoration:none; text-align:center;">✅ All Success</a>
+                    <a href="/download/failed" class="btn failed" style="text-decoration:none; text-align:center;">❌ All Failed</a>
+                </div>
+            </div>
             <div id="logs"></div>
-
-            <!-- Bulk Hotmail Reader Section -->
-            <div class="card" style="margin-top: 15px;">
-                <label>📩 Bulk Hotmail Reader (API)</label>
-                <label style="margin-top:5px; color:#a78bfa;">Code Type</label>
+            <div class="card" style="margin-top:15px;">
+                <label>📩 Bulk Hotmail Reader</label>
                 <select id="readerType">
-                    <option value="facebook">Facebook</option>
-                    <option value="all">All (Any Code)</option>
-                    <option value="instagram">Instagram</option>
-                    <option value="twitter">Twitter</option>
-                    <option value="tiktok">TikTok</option>
-                    <option value="google">Google</option>
+                    <option value="facebook">Facebook</option><option value="all">All</option><option value="instagram">Instagram</option>
+                    <option value="twitter">Twitter</option><option value="tiktok">TikTok</option><option value="google">Google</option>
                 </select>
-                <textarea id="readerCombo" placeholder="email|pass|refresh_token|client_id&#10;(Paste one combo per line)"></textarea>
+                <textarea id="readerCombo" placeholder="email|pass|refresh_token|client_id (one per line)"></textarea>
                 <button class="btn" onclick="readHotmail()" style="background:#8b5cf6;">🔍 Read Inboxes</button>
                 <div id="readerResult" style="margin-top:10px; font-size:12px; max-height:300px; overflow-y:auto; background:#0f172a; padding:10px; border-radius:8px; display:none; border:1px solid #334155;"></div>
             </div>
         </div>
     </div>
-
     <div class="bottom-nav">
         <a href="#" class="nav-item active" id="nav-home" onclick="showHome(event)">🏠 Home</a>
-        <a href="#" class="nav-item" id="nav-otp" onclick="showOTP(event)">📩 OTP List</a>
-        <a href="#" class="nav-item" onclick="window.location.reload()">🔄 Refresh</a>
+        <a href="#" class="nav-item" id="nav-otp" onclick="showOTP(event)">📩 OTP</a>
+        <a href="#" class="nav-item" onclick="window.location.reload()">🔄</a>
         <a href="/logout" class="nav-item" style="color:#ef4444;">🚪 Logout</a>
     </div>
-
 <script>
-    function togglePass() {
-        document.getElementById('customPass').style.display = document.getElementById('passMode').value === 'custom' ? 'block' : 'none';
-    }
-    function toggleName() {
-        document.getElementById('customName').style.display = document.getElementById('nameMode').value === 'custom' ? 'block' : 'none';
-    }
-
-    function showHome(e) {
-        if(e) e.preventDefault();
-        document.getElementById('mainForm').classList.remove('hidden');
-        document.getElementById('otp-container').classList.add('hidden');
-        document.getElementById('nav-home').classList.add('active');
-        document.getElementById('nav-otp').classList.remove('active');
-    }
-
-    function showOTP(e) {
-        if(e) e.preventDefault();
-        document.getElementById('mainForm').classList.add('hidden');
-        document.getElementById('otp-container').classList.remove('hidden');
-        document.getElementById('nav-otp').classList.add('active');
-        document.getElementById('nav-home').classList.remove('active');
-        fetchOTPs();
-    }
-
-    function copyCode(code) {
-        navigator.clipboard.writeText(code).then(() => {
-            alert("Code Copied: " + code);
-        }).catch(err => {
-            console.error('Failed to copy: ', err);
-        });
-    }
-
-    async function deleteOTPs() {
-        if(!confirm("Are you sure you want to delete all OTPs from database?")) return;
-        await fetch('/api/delete_otps', { method: 'POST' });
-        fetchOTPs();
-    }
+    function togglePass() { document.getElementById('customPass').style.display = document.getElementById('passMode').value === 'custom' ? 'block' : 'none'; }
+    function toggleName() { document.getElementById('customName').style.display = document.getElementById('nameMode').value === 'custom' ? 'block' : 'none'; }
+    function showHome(e) { if(e) e.preventDefault(); document.getElementById('mainForm').classList.remove('hidden'); document.getElementById('otp-container').classList.add('hidden'); document.getElementById('nav-home').classList.add('active'); document.getElementById('nav-otp').classList.remove('active'); }
+    function showOTP(e) { if(e) e.preventDefault(); document.getElementById('mainForm').classList.add('hidden'); document.getElementById('otp-container').classList.remove('hidden'); document.getElementById('nav-otp').classList.add('active'); document.getElementById('nav-home').classList.remove('active'); fetchOTPs(); }
+    function copyCode(code) { navigator.clipboard.writeText(code).then(() => alert("Copied: " + code)); }
+    async function deleteOTPs() { if(!confirm("Delete all OTPs?")) return; await fetch('/api/delete_otps', { method: 'POST' }); fetchOTPs(); }
 
     async function fetchOTPs() {
-        const otpRes = await fetch('/api/otps');
-        const otps = await otpRes.json();
-        const otpList = document.getElementById('otp-list');
-
+        const res = await fetch('/api/otps');
+        const otps = await res.json();
+        const list = document.getElementById('otp-list');
         if (otps.length > 0) {
-            otpList.innerHTML = otps.map(o => `
-                <div class="otp-list-item">
-                    <div>
-                        <span class="otp-email">${o.email}</span>
-                        <span class="otp-code">${o.code}</span>
-                    </div>
-                    <button class="copy-btn" onclick="copyCode('${o.code}')">Copy</button>
+            list.innerHTML = otps.map(o => `<div class="otp-list-item"><div><span class="otp-email">${o.email}</span><span class="otp-code">${o.code}</span></div><button class="copy-btn" onclick="copyCode('${o.code}')">Copy</button></div>`).join('');
+        } else { list.innerHTML = `<p style="color:#94a3b8; font-size:12px; text-align:center;">No OTPs.</p>`; }
+    }
+
+    async function loadBatches() {
+        const res = await fetch('/api/batches');
+        const batches = await res.json();
+        const c = document.getElementById('batchList');
+        if (!batches || batches.length === 0) { c.innerHTML = `<p style="color:#94a3b8; font-size:12px;">No batches yet.</p>`; return; }
+        c.innerHTML = batches.map(b => {
+            const isOld = b.batch_id === 0;
+            const label = isOld ? '📜 Old (Batch #0)' : `Batch #${b.batch_id}`;
+            return `
+            <div class="batch-item ${isOld ? 'old' : ''}">
+                <div class="batch-header">
+                    <span class="batch-num ${isOld ? 'old' : ''}">${label}</span>
+                    <span class="batch-counts">✅ ${b.success} &nbsp; ❌ ${b.failed}</span>
                 </div>
-            `).join('');
-        } else {
-            otpList.innerHTML = `<p style="color:#94a3b8; font-size:12px; text-align:center;">No OTPs found yet.</p>`;
-        }
+                <div class="btn-row" style="margin-top:0;">
+                    <a href="/download/success/${b.batch_id}" class="btn success" style="padding:8px; font-size:12px; text-decoration:none; text-align:center;">✅ CSV</a>
+                    <a href="/download/failed/${b.batch_id}" class="btn failed" style="padding:8px; font-size:12px; text-decoration:none; text-align:center;">❌ CSV</a>
+                </div>
+            </div>`;
+        }).join('');
     }
 
     async function startBatch() {
         const rawEmails = document.getElementById('emails').value.trim();
-        if (!rawEmails) return alert("Please enter emails!");
-
-        const osMode = document.getElementById('osMode').value;
-        const passMode = document.getElementById('passMode').value;
-        const customPass = document.getElementById('customPass').value;
-        const proxyMode = document.getElementById('proxyMode').value;
-        const nameMode = document.getElementById('nameMode').value;
-        const customName = document.getElementById('customName').value;
-        const hotmailName = document.getElementById('hotmailName').value;
-        const lang = document.getElementById('lang').value;
-
+        if (!rawEmails) return alert("Enter emails!");
         document.getElementById('logs').innerHTML = '';
         document.getElementById('startBtn').style.display = 'none';
         document.getElementById('stopBtn').style.display = 'block';
-
-        const res = await fetch('/api/start', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
+        await fetch('/api/start', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({
                 emails: rawEmails.split('\\n').map(e => e.trim()).filter(e => e),
-                os_mode: osMode,
-                pass_mode: passMode,
-                custom_pass: customPass,
-                proxy_mode: proxyMode,
-                name_mode: nameMode,
-                custom_name: customName,
-                hotmail_name: hotmailName,
-                lang: lang
+                os_mode: document.getElementById('osMode').value,
+                pass_mode: document.getElementById('passMode').value,
+                custom_pass: document.getElementById('customPass').value,
+                proxy_mode: document.getElementById('proxyMode').value,
+                name_mode: document.getElementById('nameMode').value,
+                custom_name: document.getElementById('customName').value,
+                hotmail_name: document.getElementById('hotmailName').value,
+                lang: document.getElementById('lang').value
             })
         });
     }
-
-    async function stopBatch() {
-        if (!confirm("Are you sure you want to stop the process?")) return;
-        await fetch('/api/stop', { method: 'POST' });
-        document.getElementById('stopBtn').style.display = 'none';
-    }
-
+    async function stopBatch() { if (!confirm("Stop process?")) return; await fetch('/api/stop', { method: 'POST' }); document.getElementById('stopBtn').style.display = 'none'; }
     async function readHotmail() {
-        const rawCombos = document.getElementById('readerCombo').value.trim();
-        if(!rawCombos) return alert("Enter combos (one per line)");
-
+        const raw = document.getElementById('readerCombo').value.trim();
+        if(!raw) return alert("Enter combos");
         const codeType = document.getElementById('readerType').value;
-        const combos = rawCombos.split('\\n').map(c => c.trim()).filter(c => c);
-        const resultDiv = document.getElementById('readerResult');
-        resultDiv.style.display = 'block';
-        resultDiv.innerHTML = `<p style="color:#fbbf24;">⏳ Fetching ${codeType.toUpperCase()} codes for ${combos.length} accounts...</p>`;
-
-        const res = await fetch('/api/hotmail_reader', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ combos: combos, type: codeType })
-        });
-        const resData = await res.json();
-
-        if(resData.status === 'success') {
-            let html = '';
-            resData.results.forEach(acc => {
-                html += `<div style="margin-bottom: 12px; border-left: 3px solid #8b5cf6; padding-left: 10px;">`;
-                html += `<div style="color:#a78bfa; font-weight:bold; font-size:13px; margin-bottom:5px;">${acc.email}</div>`;
-
+        const combos = raw.split('\\n').map(c => c.trim()).filter(c => c);
+        const div = document.getElementById('readerResult');
+        div.style.display = 'block';
+        div.innerHTML = `<p style="color:#fbbf24;">⏳ Fetching ${codeType.toUpperCase()} for ${combos.length}...</p>`;
+        const res = await fetch('/api/hotmail_reader', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ combos, type: codeType }) });
+        const rd = await res.json();
+        if(rd.status === 'success') {
+            div.innerHTML = rd.results.map(acc => {
+                let h = `<div style="margin-bottom:12px; border-left:3px solid #8b5cf6; padding-left:10px;"><div style="color:#a78bfa; font-weight:bold; font-size:13px;">${acc.email}</div>`;
                 if (acc.status === 'success') {
-                    if (acc.data.length === 0) {
-                        html += `<div style="color:#64748b; font-size:11px; font-style:italic;">No code found.</div>`;
-                    } else {
-                        acc.data.forEach(m => {
-                            html += `<div style="display:flex; justify-content:space-between; align-items:center; margin-top:4px; background:#1e293b; padding:6px; border-radius:6px;">
-                                <div style="color:#4ade80; font-weight:bold; font-size:16px; letter-spacing:2px;">${m.otp}</div>
-                                <button class="copy-btn" onclick="copyCode('${m.otp}')">Copy</button>
-                            </div>`;
-                        });
-                    }
-                } else {
-                    html += `<div style="color:#ef4444; font-size:11px;">❌ ${acc.msg}</div>`;
-                }
-                html += `</div>`;
-            });
-            resultDiv.innerHTML = html;
-        } else {
-            resultDiv.innerHTML = `<p style="color:#ef4444;">❌ Error: ${resData.msg}</p>`;
-        }
+                    h += acc.data.length === 0 ? `<div style="color:#64748b; font-size:11px; font-style:italic;">No code.</div>` :
+                        acc.data.map(m => `<div style="display:flex; justify-content:space-between; margin-top:4px; background:#1e293b; padding:6px; border-radius:6px;"><span style="color:#4ade80; font-weight:bold; letter-spacing:2px;">${m.otp}</span><button class="copy-btn" onclick="copyCode('${m.otp}')">Copy</button></div>`).join('');
+                } else h += `<div style="color:#ef4444; font-size:11px;">❌ ${acc.msg}</div>`;
+                return h + `</div>`;
+            }).join('');
+        } else div.innerHTML = `<p style="color:#ef4444;">❌ ${rd.msg}</p>`;
     }
-
-    let isRunning = false;
 
     setInterval(async () => {
         const res = await fetch('/api/status');
         const data = await res.json();
-
-        isRunning = data.is_running;
-
         if (data.is_running) {
-            document.getElementById('status').innerText = `⚙️ Running (${data.success}/${data.total})`;
+            document.getElementById('status').innerText = `⚙️ Running B#${data.batch_number} (${data.success}/${data.total})`;
             document.getElementById('status').style.background = '#0ea5e9';
             document.getElementById('startBtn').style.display = 'none';
             document.getElementById('stopBtn').style.display = 'block';
@@ -813,23 +692,21 @@ HTML_TEMPLATE = """
             document.getElementById('startBtn').style.display = 'block';
             document.getElementById('stopBtn').style.display = 'none';
         }
-
-        const logsDiv = document.getElementById('logs');
+        const logs = document.getElementById('logs');
         if (data.logs.length > 0) {
-            logsDiv.innerHTML = data.logs.map(l => `<div class="log-line ${l.color}">[${l.time}] ${l.msg}</div>`).join('');
-            logsDiv.scrollTop = logsDiv.scrollHeight;
+            logs.innerHTML = data.logs.map(l => `<div class="${l.color}">[${l.time}] ${l.msg}</div>`).join('');
+            logs.scrollTop = logs.scrollHeight;
         }
-
-        const otpContainer = document.getElementById('otp-container');
-        if (!otpContainer.classList.contains('hidden')) {
-            fetchOTPs();
-        }
+        if (!document.getElementById('otp-container').classList.contains('hidden')) fetchOTPs();
+        loadBatches();
     }, 3000);
 </script>
-</body>
-</html>
+</body></html>
 """
 
+# ══════════════════════════════════════════════════════════
+# WEB ROUTES
+# ══════════════════════════════════════════════════════════
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
@@ -852,16 +729,16 @@ def home():
 @app.route('/api/status')
 def get_status():
     if not session.get('logged_in'): return jsonify({"error": "Unauthorized"}), 401
-    return jsonify({"is_running": IS_RUNNING, "success": WEB_STATE["success"], "total": WEB_STATE["total"], "logs": WEB_LOGS})
+    return jsonify({"is_running": IS_RUNNING, "success": WEB_STATE["success"], "total": WEB_STATE["total"],
+                    "batch_number": WEB_STATE.get("batch_number"), "logs": WEB_LOGS})
 
 @app.route('/api/otps')
 def get_otps():
     if not session.get('logged_in'): return jsonify({"error": "Unauthorized"}), 401
     try:
-        response = supabase.table("otps").select("email, code").order("created_at", desc=True).limit(50).execute()
-        return jsonify(response.data)
-    except Exception:
-        return jsonify([])
+        r = supabase.table("otps").select("email, code").order("created_at", desc=True).limit(50).execute()
+        return jsonify(r.data)
+    except: return jsonify([])
 
 @app.route('/api/delete_otps', methods=['POST'])
 def api_delete_otps():
@@ -872,50 +749,66 @@ def api_delete_otps():
     except Exception as e:
         return jsonify({"status": "error", "msg": str(e)}), 500
 
+@app.route('/api/batches')
+def api_batches():
+    if not session.get('logged_in'): return jsonify({"error": "Unauthorized"}), 401
+    try:
+        acc = fetch_all_rows("accounts", "batch_id")
+        fail = fetch_all_rows("failed_accounts", "batch_id")
+
+        counts = {}
+        for row in acc:
+            b = row.get('batch_id')
+            if b is None: continue
+            counts.setdefault(b, {"success": 0, "failed": 0})["success"] += 1
+        for row in fail:
+            b = row.get('batch_id')
+            if b is None: continue
+            counts.setdefault(b, {"success": 0, "failed": 0})["failed"] += 1
+
+        result = [{"batch_id": k, "success": v["success"], "failed": v["failed"]}
+                  for k, v in sorted(counts.items(), reverse=True)]
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route('/api/start', methods=['POST'])
 def api_start():
     global IS_RUNNING, WEB_LOGS
     if not session.get('logged_in'): return jsonify({"error": "Unauthorized"}), 401
     if IS_RUNNING: return jsonify({"error": "Already running"}), 400
-
     data = request.json
-    raw_emails = data.get('emails', [])
-    if not raw_emails: return jsonify({"error": "No emails"}), 400
-
-    email_data_list = []
-    for line in raw_emails:
-        email = line.split('|')[0].strip()
-        if '@' in email: email_data_list.append({"email": email, "full_combo": line})
-
-    if not email_data_list: return jsonify({"error": "No valid emails"}), 400
-
+    raw = data.get('emails', [])
+    if not raw: return jsonify({"error": "No emails"}), 400
+    edl = []
+    for line in raw:
+        e = line.split('|')[0].strip()
+        if '@' in e: edl.append({"email": e, "full_combo": line})
+    if not edl: return jsonify({"error": "No valid emails"}), 400
     if data['pass_mode'] == 'fix':
         tz = datetime.timezone(datetime.timedelta(hours=6))
         password = f"SOHAV{datetime.datetime.now(tz).day}"
     else:
         password = data.get('custom_pass', '')
         if not password: return jsonify({"error": "Password required"}), 400
-
-    use_proxy = data['proxy_mode'] == 'yes'
-    custom_name = data.get('custom_name', '') if data.get('name_mode') == 'custom' else ''
-    hotmail_name = data.get('hotmail_name', '').strip()
-
-    lang = data.get('lang', 'us')
-    os_mode = data.get('os_mode', 'ios')
-
     WEB_LOGS = []
-    add_web_log(f"Starting process for {len(email_data_list)} accounts...", "cyan")
-    threading.Thread(target=execute_batch, args=(None, email_data_list, password, lang, custom_name, hotmail_name, use_proxy, os_mode, True)).start()
+    add_web_log(f"Starting {len(edl)} accounts...", "cyan")
+    threading.Thread(target=execute_batch, args=(
+        None, edl, password, data.get('lang', 'us'),
+        data.get('custom_name', '') if data.get('name_mode') == 'custom' else '',
+        data.get('hotmail_name', '').strip(),
+        data['proxy_mode'] == 'yes', data.get('os_mode', 'ios'), True
+    )).start()
     return jsonify({"status": "started"})
 
 @app.route('/api/stop', methods=['POST'])
 def api_stop():
     global IS_RUNNING, CURRENT_BATCH_ID
     if not session.get('logged_in'): return jsonify({"error": "Unauthorized"}), 401
-    CANCEL_EVENT.set()                # instant wake for all sleepers
+    CANCEL_EVENT.set()
     IS_RUNNING = False
     CURRENT_BATCH_ID += 1
-    add_web_log("🛑 Stop requested by user...", "red")
+    add_web_log("🛑 Stop requested...", "red")
     return jsonify({"status": "stopping"})
 
 @app.route('/api/hotmail_reader', methods=['POST'])
@@ -924,499 +817,476 @@ def api_hotmail_reader():
     data = request.json
     combos = data.get('combos', [])
     code_type = data.get('type', 'facebook')
-
-    if not combos:
-        return jsonify({"status": "error", "msg": "No combos provided"})
-
+    if not combos: return jsonify({"status": "error", "msg": "No combos"})
     results = []
-
     def process_combo(combo):
         email_addr = combo.split('|')[0] if len(combo.split('|')) > 0 else combo
         code, error = get_code_via_api(combo, code_type=code_type)
-
-        if error:
-            return {"email": email_addr, "status": "error", "msg": error}
-
-        messages = []
-        if code:
-            messages.append({"otp": code})
-
-        return {"email": email_addr, "status": "success", "data": messages}
-
-    with ThreadPoolExecutor(max_workers=5) as executor:
-        futures = [executor.submit(process_combo, c) for c in combos]
-        for future in futures:
-            results.append(future.result())
-
+        if error: return {"email": email_addr, "status": "error", "msg": error}
+        msgs = [{"otp": code}] if code else []
+        return {"email": email_addr, "status": "success", "data": msgs}
+    with ThreadPoolExecutor(max_workers=5) as ex:
+        futures = [ex.submit(process_combo, c) for c in combos]
+        for f in futures: results.append(f.result())
     return jsonify({"status": "success", "results": results})
 
+# ─── DOWNLOADS ───────────────────────────────────────────
 @app.route('/download/success')
 def download_success():
     if not session.get('logged_in'): return redirect(url_for('login'))
-
     try:
-        response = supabase.table("accounts").select("uid, password, cookie, full_combo").execute()
-        data = response.data
-        if not data: return "No Data Found", 404
-
-        output = io.StringIO()
-        writer = csv.writer(output)
-        writer.writerow(['UID', 'PASSWORD', 'COOKIE', 'FULL_MAIL'])
-        for row in data:
-            writer.writerow([row.get('uid'), row.get('password'), row.get('cookie'), row.get('full_combo')])
-
-        mem = io.BytesIO()
-        mem.write(output.getvalue().encode('utf-8-sig'))
-        mem.seek(0)
-        return send_file(mem, as_attachment=True, download_name="success_accounts.csv", mimetype='text/csv')
-    except Exception as e:
-        return f"Error: {e}", 500
+        rows = fetch_all_rows("accounts", "uid, password, cookie, full_combo")
+        if not rows: return "No Data", 404
+        out = [[x.get('uid'), x.get('password'), x.get('cookie'), x.get('full_combo')] for x in rows]
+        mem = _write_csv(['UID', 'PASSWORD', 'COOKIE', 'FULL_MAIL'], out)
+        return send_file(mem, as_attachment=True, download_name="all_success.csv", mimetype='text/csv')
+    except Exception as e: return f"Error: {e}", 500
 
 @app.route('/download/failed')
 def download_failed():
     if not session.get('logged_in'): return redirect(url_for('login'))
-
     try:
-        response = supabase.table("failed_accounts").select("full_combo, reason").execute()
-        data = response.data
-        if not data: return "No Data Found", 404
+        rows = fetch_all_rows("failed_accounts", "full_combo, reason")
+        if not rows: return "No Data", 404
+        out = [[x.get('full_combo'), x.get('reason')] for x in rows]
+        mem = _write_csv(['FULL_MAIL', 'REASON'], out)
+        return send_file(mem, as_attachment=True, download_name="all_failed.csv", mimetype='text/csv')
+    except Exception as e: return f"Error: {e}", 500
 
-        output = io.StringIO()
-        writer = csv.writer(output)
-        writer.writerow(['FULL_MAIL', 'REASON'])
-        for row in data:
-            writer.writerow([row.get('full_combo'), row.get('reason')])
+@app.route('/download/success/<int:batch_id>')
+def download_success_batch(batch_id):
+    if not session.get('logged_in'): return redirect(url_for('login'))
+    try:
+        rows = []
+        offset = 0
+        while True:
+            r = supabase.table("accounts").select("uid, password, cookie, full_combo") \
+                .eq("batch_id", batch_id).range(offset, offset + 999).execute()
+            if not r.data: break
+            rows.extend(r.data)
+            if len(r.data) < 1000: break
+            offset += 1000
+        if not rows: return "No data for this batch", 404
+        out = [[x.get('uid'), x.get('password'), x.get('cookie'), x.get('full_combo')] for x in rows]
+        mem = _write_csv(['UID', 'PASSWORD', 'COOKIE', 'FULL_MAIL'], out)
+        return send_file(mem, as_attachment=True, download_name=f"batch_{batch_id}_success.csv", mimetype='text/csv')
+    except Exception as e: return f"Error: {e}", 500
 
-        mem = io.BytesIO()
-        mem.write(output.getvalue().encode('utf-8-sig'))
-        mem.seek(0)
-        return send_file(mem, as_attachment=True, download_name="failed_accounts.csv", mimetype='text/csv')
-    except Exception as e:
-        return f"Error: {e}", 500
+@app.route('/download/failed/<int:batch_id>')
+def download_failed_batch(batch_id):
+    if not session.get('logged_in'): return redirect(url_for('login'))
+    try:
+        rows = []
+        offset = 0
+        while True:
+            r = supabase.table("failed_accounts").select("full_combo, reason") \
+                .eq("batch_id", batch_id).range(offset, offset + 999).execute()
+            if not r.data: break
+            rows.extend(r.data)
+            if len(r.data) < 1000: break
+            offset += 1000
+        if not rows: return "No data for this batch", 404
+        out = [[x.get('full_combo'), x.get('reason')] for x in rows]
+        mem = _write_csv(['FULL_MAIL', 'REASON'], out)
+        return send_file(mem, as_attachment=True, download_name=f"batch_{batch_id}_failed.csv", mimetype='text/csv')
+    except Exception as e: return f"Error: {e}", 500
 
 # ══════════════════════════════════════════════════════════
-# BOT 1 LOGIC (MAIN BOT - CREATOR)
+# BOT 1 (CREATOR)
 # ══════════════════════════════════════════════════════════
 user_states = {}
 
 def get_main_menu_1(chat_id):
-    markup = ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add(KeyboardButton('🚀 Create Account'))
-    markup.add(KeyboardButton('📩 Hotmail Reader'))
-    if IS_RUNNING: markup.add(KeyboardButton('🛑 Stop Process'))
+    m = ReplyKeyboardMarkup(resize_keyboard=True)
+    m.add(KeyboardButton('🚀 Create Account'))
+    m.add(KeyboardButton('📩 Hotmail Reader'))
+    if IS_RUNNING: m.add(KeyboardButton('🛑 Stop Process'))
     if str(chat_id) == ADMIN_ID:
-        markup.add(KeyboardButton('⚙️ Admin Panel'), KeyboardButton('🔌 Proxies'))
-    return markup
+        m.add(KeyboardButton('⚙️ Admin Panel'), KeyboardButton('🔌 Proxies'))
+    return m
 
 @bot1.message_handler(commands=['start'])
 def send_welcome_1(message):
     chat_id = message.chat.id
-    if not is_authorized(chat_id): return bot1.reply_to(message, "⛔ **Access Denied!**")
+    if not is_authorized(chat_id): return bot1.reply_to(message, "⛔ Access Denied!")
     bot1.reply_to(message, f"Welcome!\n🆔 `{chat_id}`", reply_markup=get_main_menu_1(chat_id), parse_mode='Markdown')
 
-@bot1.message_handler(func=lambda message: message.text == '🛑 Stop Process')
+@bot1.message_handler(func=lambda m: m.text == '🛑 Stop Process')
 def stop_process(message):
     global IS_RUNNING, CURRENT_BATCH_ID
-    CANCEL_EVENT.set()                 # instant wake
-    IS_RUNNING = False
-    CURRENT_BATCH_ID += 1
+    CANCEL_EVENT.set(); IS_RUNNING = False; CURRENT_BATCH_ID += 1
     user_states[message.chat.id] = {}
-    bot1.send_message(message.chat.id, "🛑 **Stopping...**", reply_markup=get_main_menu_1(message.chat.id))
+    bot1.send_message(message.chat.id, "🛑 Stopping...", reply_markup=get_main_menu_1(message.chat.id))
 
-@bot1.message_handler(func=lambda message: message.text == '🔌 Proxies')
+@bot1.message_handler(func=lambda m: m.text == '🔌 Proxies')
 def proxy_menu(message):
-    chat_id = message.chat.id
-    if str(chat_id) != ADMIN_ID: return
+    if str(message.chat.id) != ADMIN_ID: return
+    m = ReplyKeyboardMarkup(resize_keyboard=True)
+    m.add(KeyboardButton('➕ Add Proxy'), KeyboardButton('👀 View Proxies'))
+    m.add(KeyboardButton('🗑 Clear Proxies'), KeyboardButton('🔙 Back to Menu'))
+    bot1.send_message(message.chat.id, f"🔌 **Proxy Manager**\nTotal: `{len(load_proxies())}`", reply_markup=m, parse_mode='Markdown')
 
-    markup = ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add(KeyboardButton('➕ Add Proxy'), KeyboardButton('👀 View Proxies'))
-    markup.add(KeyboardButton('🗑 Clear Proxies'), KeyboardButton('🔙 Back to Menu'))
-
-    proxies = load_proxies()
-    bot1.send_message(chat_id, f"🔌 **Proxy Manager**\n\nTotal Proxies: `{len(proxies)}`\nSelect an option:", reply_markup=markup, parse_mode='Markdown')
-
-@bot1.message_handler(func=lambda message: message.text == '➕ Add Proxy')
+@bot1.message_handler(func=lambda m: m.text == '➕ Add Proxy')
 def add_proxy(message):
     if str(message.chat.id) != ADMIN_ID: return
     user_states[message.chat.id] = {'step': 'adding_proxy'}
-    bot1.send_message(message.chat.id, "📝 Paste proxies here (one per line).\nFormat: `ip:port` or `ip:port:user:pass`", parse_mode='Markdown', reply_markup=ReplyKeyboardRemove())
+    bot1.send_message(message.chat.id, "Paste proxies (ip:port or ip:port:user:pass)", reply_markup=ReplyKeyboardRemove())
 
-@bot1.message_handler(func=lambda message: user_states.get(message.chat.id, {}).get('step') == 'adding_proxy')
+@bot1.message_handler(func=lambda m: user_states.get(m.chat.id, {}).get('step') == 'adding_proxy')
 def save_proxy(message):
     chat_id = message.chat.id
     lines = [l.strip() for l in message.text.split('\n') if ':' in l]
-
-    if not lines:
-        return bot1.send_message(chat_id, "❌ No valid proxy found.\nFormat: ip:port or ip:port:user:pass")
-
+    if not lines: return bot1.send_message(chat_id, "❌ No valid proxy")
     added = 0
-    failed = 0
-    errors = []
-
     for line in lines:
         try:
             supabase.table("proxies").insert({"proxy_str": line}).execute()
             added += 1
-        except Exception as e:
-            failed += 1
-            errors.append(str(e))
-
+        except: pass
     user_states[chat_id] = {}
+    bot1.send_message(chat_id, f"✅ Added {added}", reply_markup=get_main_menu_1(chat_id))
 
-    if added > 0:
-        bot1.send_message(chat_id, f"✅ Added {added} proxies to database.\n{f'Failed: {failed}' if failed else ''}", reply_markup=get_main_menu_1(chat_id))
-    else:
-        err_msg = errors[0] if errors else "Unknown error"
-        bot1.send_message(chat_id, f"❌ Failed to add proxies.\nError: {err_msg}", reply_markup=get_main_menu_1(chat_id))
-
-@bot1.message_handler(func=lambda message: message.text == '👀 View Proxies')
+@bot1.message_handler(func=lambda m: m.text == '👀 View Proxies')
 def view_proxies(message):
     if str(message.chat.id) != ADMIN_ID: return
-    proxies = load_proxies()
-    if not proxies: return bot1.send_message(message.chat.id, "❌ No proxies found.")
+    p = load_proxies()
+    if not p: return bot1.send_message(message.chat.id, "❌ None")
+    t = "🔌 **Proxies:**\n\n" + "\n".join([f"`{x}`" for x in p[:20]])
+    if len(p) > 20: t += f"\n...and {len(p)-20} more."
+    bot1.send_message(message.chat.id, t, parse_mode='Markdown')
 
-    text = "🔌 **Proxies List:**\n\n" + "\n".join([f"`{p}`" for p in proxies[:20]])
-    if len(proxies) > 20: text += f"\n\n...and {len(proxies)-20} more."
-    bot1.send_message(message.chat.id, text, parse_mode='Markdown')
-
-@bot1.message_handler(func=lambda message: message.text == '🗑 Clear Proxies')
+@bot1.message_handler(func=lambda m: m.text == '🗑 Clear Proxies')
 def clear_proxies(message):
     if str(message.chat.id) != ADMIN_ID: return
     try:
         supabase.table("proxies").delete().neq("id", 0).execute()
-        bot1.send_message(message.chat.id, "✅ All proxies deleted.")
-    except Exception as e:
-        bot1.send_message(message.chat.id, f"Error: {e}")
+        bot1.send_message(message.chat.id, "✅ Deleted")
+    except Exception as e: bot1.send_message(message.chat.id, f"Err: {e}")
 
-@bot1.message_handler(func=lambda message: message.text == '🔙 Back to Menu')
+@bot1.message_handler(func=lambda m: m.text == '🔙 Back to Menu')
 def back_to_menu(message):
     user_states[message.chat.id] = {}
     bot1.send_message(message.chat.id, "Main Menu:", reply_markup=get_main_menu_1(message.chat.id))
 
-@bot1.message_handler(func=lambda message: message.text == '📩 Hotmail Reader')
+@bot1.message_handler(func=lambda m: m.text == '📩 Hotmail Reader')
 def hotmail_reader_menu(message):
     chat_id = message.chat.id
     if not is_authorized(chat_id): return
     user_states[chat_id] = {'step': 'reader_type'}
-
-    markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
-    markup.add('Facebook', 'All (Any Code)')
-    markup.add('Instagram', 'Google')
-    markup.add('🔙 Cancel')
-    bot1.send_message(chat_id, "📩 **Select Code Type for Reader:**", reply_markup=markup)
+    m = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
+    m.add('Facebook', 'All (Any Code)'); m.add('Instagram', 'Google'); m.add('🔙 Cancel')
+    bot1.send_message(chat_id, "📩 Code Type:", reply_markup=m)
 
 @bot1.message_handler(commands=['create'])
-@bot1.message_handler(func=lambda message: message.text == '🚀 Create Account')
+@bot1.message_handler(func=lambda m: m.text == '🚀 Create Account')
 def start_creation(message):
     chat_id = message.chat.id
     if not is_authorized(chat_id): return
-    if IS_RUNNING: return bot1.send_message(chat_id, "⚠️ Process running!")
+    if IS_RUNNING: return bot1.send_message(chat_id, "⚠️ Running!")
     user_states[chat_id] = {'step': 'emails'}
     bot1.send_message(chat_id, "📧 Paste emails:", reply_markup=ReplyKeyboardRemove())
 
 def show_hotmail_name_menu(chat_id):
-    markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
-    markup.add('Auto Name', 'Custom Name')
-    markup.add('🔙 Cancel')
-    bot1.send_message(chat_id, "📧 Select Name Mode for Hotmail Emails (Hotmail/Outlook):", reply_markup=markup)
+    m = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
+    m.add('Auto Name', 'Custom Name'); m.add('🔙 Cancel')
+    bot1.send_message(chat_id, "📧 Name Mode (Hotmail):", reply_markup=m)
 
-@bot1.message_handler(func=lambda message: True)
+@bot1.message_handler(func=lambda m: True)
 def handle_inputs(message):
     chat_id = message.chat.id
     if not is_authorized(chat_id): return
     if chat_id not in user_states: return
-    state = user_states[chat_id]
+    st = user_states[chat_id]
 
-    if state['step'] == 'reader_type':
-        text = message.text.lower()
-        if 'facebook' in text: state['reader_type'] = 'facebook'
-        elif 'all' in text: state['reader_type'] = 'all'
-        elif 'instagram' in text: state['reader_type'] = 'instagram'
-        elif 'google' in text: state['reader_type'] = 'google'
-        elif 'cancel' in text:
+    if st['step'] == 'reader_type':
+        t = message.text.lower()
+        if 'facebook' in t: st['reader_type'] = 'facebook'
+        elif 'all' in t: st['reader_type'] = 'all'
+        elif 'instagram' in t: st['reader_type'] = 'instagram'
+        elif 'google' in t: st['reader_type'] = 'google'
+        elif 'cancel' in t:
             del user_states[chat_id]
             return bot1.send_message(chat_id, "Cancelled.", reply_markup=get_main_menu_1(chat_id))
-        else: return bot1.send_message(chat_id, "❌ Select from buttons.")
+        else: return bot1.send_message(chat_id, "❌ From buttons.")
+        st['step'] = 'hotmail_reader'
+        bot1.send_message(chat_id, f"✅ {st['reader_type'].upper()}.\nPaste combos:", reply_markup=ReplyKeyboardRemove())
 
-        state['step'] = 'hotmail_reader'
-        bot1.send_message(chat_id, f"✅ Type set to **{state['reader_type'].upper()}**.\n\nPaste your combos here (one per line):\n`email|pass|refresh_token|client_id`", parse_mode='Markdown', reply_markup=ReplyKeyboardRemove())
+    elif st['step'] == 'emails':
+        lines = [l.strip() for l in message.text.split('\n') if l.strip()]
+        edl = []
+        for l in lines:
+            e = l.split('|')[0].strip()
+            if '@' in e: edl.append({"email": e, "full_combo": l})
+        if not edl: return bot1.send_message(chat_id, "❌ Invalid.")
+        st['email_data_list'] = edl
+        st['step'] = 'os_mode'
+        m = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
+        m.add('iOS', 'Android'); m.add('🔙 Cancel')
+        bot1.send_message(chat_id, f"✅ {len(edl)} emails.\n📱 OS:", reply_markup=m)
 
-    elif state['step'] == 'emails':
-        raw_lines = [l.strip() for l in message.text.split('\n') if l.strip()]
-        email_data_list = []
-        for line in raw_lines:
-            email = line.split('|')[0].strip()
-            if '@' in email: email_data_list.append({"email": email, "full_combo": line})
+    elif st['step'] == 'hotmail_reader':
+        lines = [l.strip() for l in message.text.split('\n') if l.strip()]
+        ct = st.get('reader_type', 'facebook')
+        bot1.send_message(chat_id, f"⏳ Fetching {ct.upper()} for {len(lines)}...", reply_markup=get_main_menu_1(chat_id))
+        def bulk(combos):
+            res = []
+            for c in combos:
+                if CANCEL_EVENT.is_set(): res.append("🛑 Cancelled."); break
+                ea = c.split('|')[0] if len(c.split('|')) > 0 else c
+                code, err = get_code_via_api(c, code_type=ct)
+                if code: res.append(f"✅ `{ea}` — `{code}`")
+                elif err: res.append(f"❌ `{ea}` — {err}")
+                else: res.append(f"⚠️ `{ea}` — No Code")
+            out = f"📩 **{ct.upper()}:**\n\n" + "\n".join(res)
+            for i in range(0, len(out), 4000):
+                bot1.send_message(chat_id, out[i:i+4000], parse_mode='Markdown')
+        threading.Thread(target=bulk, args=(lines,)).start()
 
-        if not email_data_list: return bot1.send_message(chat_id, "❌ Invalid format.")
-        state['email_data_list'] = email_data_list
-        state['step'] = 'os_mode'
-
-        msg = f"✅ Got {len(email_data_list)} emails."
-
-        markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
-        markup.add('iOS', 'Android')
-        markup.add('🔙 Cancel')
-        bot1.send_message(chat_id, msg + "\n📱 Select OS Mode:", reply_markup=markup)
-
-    elif state['step'] == 'hotmail_reader':
-        raw_lines = [l.strip() for l in message.text.split('\n') if l.strip()]
-        code_type = state.get('reader_type', 'facebook')
-        bot1.send_message(chat_id, f"⏳ Fetching {code_type.upper()} codes via API for {len(raw_lines)} accounts...", reply_markup=get_main_menu_1(chat_id))
-
-        def fetch_bulk_codes(combos):
-            results = []
-            for combo in combos:
-                if CANCEL_EVENT.is_set():
-                    results.append("🛑 Cancelled by user.")
-                    break
-                email_addr = combo.split('|')[0] if len(combo.split('|')) > 0 else combo
-                code, error = get_code_via_api(combo, code_type=code_type)
-
-                if code:
-                    results.append(f"✅ `{email_addr}` - Code: `{code}`")
-                elif error:
-                    results.append(f"❌ `{email_addr}` - {error}")
-                else:
-                    results.append(f"⚠️ `{email_addr}` - No Code")
-
-            output_text = f"📩 **Hotmail Reader Results ({code_type.upper()}):**\n\n" + "\n".join(results)
-            for i in range(0, len(output_text), 4000):
-                bot1.send_message(chat_id, output_text[i:i+4000], parse_mode='Markdown')
-
-        threading.Thread(target=fetch_bulk_codes, args=(raw_lines,)).start()
-
-    elif state['step'] == 'os_mode':
-        text = message.text.lower()
-        if 'ios' in text: state['os_type'] = 'ios'
-        elif 'android' in text: state['os_type'] = 'android'
-        elif 'cancel' in text:
+    elif st['step'] == 'os_mode':
+        t = message.text.lower()
+        if 'ios' in t: st['os_type'] = 'ios'
+        elif 'android' in t: st['os_type'] = 'android'
+        elif 'cancel' in t:
             del user_states[chat_id]
             return bot1.send_message(chat_id, "Cancelled.", reply_markup=get_main_menu_1(chat_id))
-        else: return bot1.send_message(chat_id, "❌ Select OS from buttons.")
+        else: return bot1.send_message(chat_id, "❌ From buttons.")
+        st['step'] = 'password_mode'
+        m = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
+        m.add('Fix Password (SOHAVdd)', 'Custom Password'); m.add('🔙 Cancel')
+        bot1.send_message(chat_id, "🔐 Password:", reply_markup=m)
 
-        state['step'] = 'password_mode'
-        markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
-        markup.add('Fix Password (SOHAVdd)', 'Custom Password')
-        markup.add('🔙 Cancel')
-        bot1.send_message(chat_id, "🔐 Select Password Mode:", reply_markup=markup)
-
-    elif state['step'] == 'password_mode':
+    elif st['step'] == 'password_mode':
         if 'Fix Password' in message.text:
             tz = datetime.timezone(datetime.timedelta(hours=6))
-            state['password'] = f"SOHAV{datetime.datetime.now(tz).day}"
-            state['step'] = 'proxy_mode'
-            bot1.send_message(chat_id, f"✅ Fixed Pass: `{state['password']}`", parse_mode='Markdown', reply_markup=ReplyKeyboardRemove())
+            st['password'] = f"SOHAV{datetime.datetime.now(tz).day}"
+            st['step'] = 'proxy_mode'
+            bot1.send_message(chat_id, f"✅ `{st['password']}`", parse_mode='Markdown', reply_markup=ReplyKeyboardRemove())
             show_proxy_menu(chat_id)
         elif 'Custom Password' in message.text:
-            state['step'] = 'custom_password'
-            bot1.send_message(chat_id, "✍️ Enter Custom Password:", reply_markup=telebot.types.ReplyKeyboardRemove())
+            st['step'] = 'custom_password'
+            bot1.send_message(chat_id, "✍️ Enter Password:", reply_markup=ReplyKeyboardRemove())
         elif 'Cancel' in message.text:
             del user_states[chat_id]
             return bot1.send_message(chat_id, "Cancelled.", reply_markup=get_main_menu_1(chat_id))
-        else: bot1.send_message(chat_id, "❌ Select from buttons.")
+        else: bot1.send_message(chat_id, "❌ From buttons.")
 
-    elif state['step'] == 'custom_password':
-        state['password'] = message.text.strip()
-        state['step'] = 'proxy_mode'
-        bot1.send_message(chat_id, f"✅ Custom Pass set.", reply_markup=ReplyKeyboardRemove())
+    elif st['step'] == 'custom_password':
+        st['password'] = message.text.strip()
+        st['step'] = 'proxy_mode'
+        bot1.send_message(chat_id, "✅ Set.", reply_markup=ReplyKeyboardRemove())
         show_proxy_menu(chat_id)
 
-    elif state['step'] == 'proxy_mode':
-        choice = message.text
-        if 'No Proxy' in choice: state['use_proxy'] = False; next_step = True
-        elif 'Use Proxy' in choice:
-            if len(load_proxies()) == 0: return bot1.send_message(chat_id, "⚠️ No proxies found in database! Add from main menu.")
-            state['use_proxy'] = True; next_step = True
-        elif 'Cancel' in choice:
+    elif st['step'] == 'proxy_mode':
+        if 'No Proxy' in message.text: st['use_proxy'] = False; go = True
+        elif 'Use Proxy' in message.text:
+            if len(load_proxies()) == 0: return bot1.send_message(chat_id, "⚠️ No proxies!")
+            st['use_proxy'] = True; go = True
+        elif 'Cancel' in message.text:
             del user_states[chat_id]
             return bot1.send_message(chat_id, "Cancelled.", reply_markup=get_main_menu_1(chat_id))
-        else: next_step = False; bot1.send_message(chat_id, "❌ Select from buttons.")
+        else: go = False; bot1.send_message(chat_id, "❌ From buttons.")
+        if go:
+            st['step'] = 'name_mode_com'
+            m = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
+            m.add('Auto Name', 'Custom Name'); m.add('🔙 Cancel')
+            bot1.send_message(chat_id, "👤 Name Mode (.com):", reply_markup=m)
 
-        if next_step:
-            state['step'] = 'name_mode_com'
-            markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
-            markup.add('Auto Name', 'Custom Name')
-            markup.add('🔙 Cancel')
-            bot1.send_message(chat_id, "👤 Select Name Mode for .com Emails (Gmail, Yahoo):", reply_markup=markup)
-
-    elif state['step'] == 'name_mode_com':
+    elif st['step'] == 'name_mode_com':
         if message.text == 'Custom Name':
-            state['step'] = 'custom_name_com'
-            bot1.send_message(chat_id, "✍️ Send .com Name: Firstname Lastname", reply_markup=ReplyKeyboardRemove())
+            st['step'] = 'custom_name_com'
+            bot1.send_message(chat_id, "✍️ .com Name: First Last", reply_markup=ReplyKeyboardRemove())
         elif 'Cancel' in message.text:
             del user_states[chat_id]
             return bot1.send_message(chat_id, "Cancelled.", reply_markup=get_main_menu_1(chat_id))
         else:
-            state['custom_name'] = ''
-            state['step'] = 'name_mode_hotmail'
-            show_hotmail_name_menu(chat_id)
+            st['custom_name'] = ''; st['step'] = 'name_mode_hotmail'; show_hotmail_name_menu(chat_id)
 
-    elif state['step'] == 'custom_name_com':
-        state['custom_name'] = message.text.strip()
-        state['step'] = 'name_mode_hotmail'
-        show_hotmail_name_menu(chat_id)
+    elif st['step'] == 'custom_name_com':
+        st['custom_name'] = message.text.strip(); st['step'] = 'name_mode_hotmail'; show_hotmail_name_menu(chat_id)
 
-    elif state['step'] == 'name_mode_hotmail':
+    elif st['step'] == 'name_mode_hotmail':
         if message.text == 'Custom Name':
-            state['step'] = 'custom_name_hotmail'
-            bot1.send_message(chat_id, "✍️ Send Hotmail Name: Firstname Lastname", reply_markup=ReplyKeyboardRemove())
+            st['step'] = 'custom_name_hotmail'
+            bot1.send_message(chat_id, "✍️ Hotmail Name: First Last", reply_markup=ReplyKeyboardRemove())
         elif 'Cancel' in message.text:
             del user_states[chat_id]
             return bot1.send_message(chat_id, "Cancelled.", reply_markup=get_main_menu_1(chat_id))
         else:
-            state['hotmail_name'] = ''
-            state['step'] = 'language'
-            show_languages(chat_id)
+            st['hotmail_name'] = ''; st['step'] = 'language'; show_languages(chat_id)
 
-    elif state['step'] == 'custom_name_hotmail':
-        state['hotmail_name'] = message.text.strip()
-        state['step'] = 'language'
-        show_languages(chat_id)
+    elif st['step'] == 'custom_name_hotmail':
+        st['hotmail_name'] = message.text.strip(); st['step'] = 'language'; show_languages(chat_id)
 
-    elif state['step'] == 'language':
+    elif st['step'] == 'language':
         if 'Cancel' in message.text:
             del user_states[chat_id]
             return bot1.send_message(chat_id, "Cancelled.", reply_markup=get_main_menu_1(chat_id))
-        state['lang'] = message.text.strip().lower()[:2]
-        start_batch_from_state(chat_id, state)
+        st['lang'] = message.text.strip().lower()[:2]
+        start_batch_from_state(chat_id, st)
 
 def show_proxy_menu(chat_id):
-    proxy_count = len(load_proxies())
-    proxy_text = f"Use Proxy ({proxy_count} Loaded)" if proxy_count > 0 else "Use Proxy (0 Loaded)"
-    markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
-    markup.add('No Proxy (Direct)', proxy_text)
-    markup.add('🔙 Cancel')
-    bot1.send_message(chat_id, "🌐 Select Proxy Mode:", reply_markup=markup)
+    n = len(load_proxies())
+    m = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
+    m.add('No Proxy (Direct)', f"Use Proxy ({n} Loaded)"); m.add('🔙 Cancel')
+    bot1.send_message(chat_id, "🌐 Proxy:", reply_markup=m)
 
 def show_languages(chat_id):
-    markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True, row_width=4)
-    buttons = [KeyboardButton(code) for code in LANG_MAP.keys()]
-    markup.add(*buttons)
-    markup.add(KeyboardButton('🔙 Cancel'))
-    bot1.send_message(chat_id, "🌍 Select Language:", reply_markup=markup)
+    m = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True, row_width=4)
+    m.add(*[KeyboardButton(c) for c in LANG_MAP.keys()]); m.add(KeyboardButton('🔙 Cancel'))
+    bot1.send_message(chat_id, "🌍 Language:", reply_markup=m)
 
-def start_batch_from_state(chat_id, state):
+def start_batch_from_state(chat_id, st):
     global CURRENT_LANG_HEADER
-    lang = state['lang']
-    if lang in LANG_MAP: CURRENT_LANG_HEADER = LANG_MAP[lang][0]
-    else: CURRENT_LANG_HEADER = LANG_MAP['us'][0]
-
-    state['step'] = None
-    proxy_status = "Proxy ON" if state['use_proxy'] else "Direct IP"
-    os_status = state['os_type'].upper()
-
-    bot1.send_message(chat_id, f"⚙️ Starting for {len(state['email_data_list'])} accounts ({proxy_status} | Lang: {lang.upper()} | OS: {os_status})...\n\n👇 *Please wait...*", parse_mode='Markdown', reply_markup=ReplyKeyboardRemove())
-    threading.Thread(target=execute_batch, args=(chat_id, state['email_data_list'], state['password'], lang, state['custom_name'], state['hotmail_name'], state['use_proxy'], state['os_type'], False)).start()
-
+    lang = st['lang']
+    CURRENT_LANG_HEADER = LANG_MAP.get(lang, LANG_MAP['us'])[0]
+    st['step'] = None
+    bot1.send_message(chat_id, f"⚙️ {len(st['email_data_list'])} accounts | Lang: {lang.upper()} | OS: {st['os_type'].upper()}...", reply_markup=ReplyKeyboardRemove())
+    threading.Thread(target=execute_batch, args=(
+        chat_id, st['email_data_list'], st['password'], lang,
+        st['custom_name'], st['hotmail_name'],
+        st['use_proxy'], st['os_type'], False
+    )).start()
 
 # ══════════════════════════════════════════════════════════
-# BOT 2 LOGIC (DOWNLOAD BOT + OTP LIST & DELETE)
+# BOT 2 (DOWNLOAD + BATCH)
 # ══════════════════════════════════════════════════════════
 def get_main_menu_2(chat_id):
-    markup = ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add(KeyboardButton('📩 OTP List'))
-    markup.add(KeyboardButton('🗑 Delete OTPs'))
-    markup.add(KeyboardButton('📁 Download Success'), KeyboardButton('❌ Download Failed'))
-    if str(chat_id) == ADMIN_ID: markup.add(KeyboardButton('📊 Stats'))
-    return markup
+    m = ReplyKeyboardMarkup(resize_keyboard=True)
+    m.add(KeyboardButton('📩 OTP List'))
+    m.add(KeyboardButton('🗑 Delete OTPs'))
+    m.add(KeyboardButton('📦 Batch Downloads'))
+    m.add(KeyboardButton('📁 Download ALL Success'), KeyboardButton('❌ Download ALL Failed'))
+    return m
 
 @bot2.message_handler(commands=['start'])
 def send_welcome_2(message):
     chat_id = message.chat.id
-    if not is_authorized(chat_id): return bot2.reply_to(message, "⛔ **Access Denied!**")
-    bot2.reply_to(message, "Welcome to Download Bot! 📁", reply_markup=get_main_menu_2(chat_id))
+    if not is_authorized(chat_id): return bot2.reply_to(message, "⛔ Access Denied!")
+    bot2.reply_to(message, "Download Bot 📁", reply_markup=get_main_menu_2(chat_id))
 
-@bot2.message_handler(func=lambda message: message.text == '📩 OTP List')
+@bot2.message_handler(func=lambda m: m.text == '📩 OTP List')
 def show_otps(message):
     chat_id = message.chat.id
     if not is_authorized(chat_id): return
-
     try:
-        response = supabase.table("otps").select("email, code").order("created_at", desc=True).limit(50).execute()
-        data = response.data
-        if not data:
-            return bot2.send_message(chat_id, "❌ No OTPs found yet.")
-
-        msg = "📩 **Recent OTPs (Last 50):**\n\n"
-        for o in data:
-            msg += f"`{o['email']}` - `{o['code']}`\n"
-
+        r = supabase.table("otps").select("email, code").order("created_at", desc=True).limit(50).execute()
+        if not r.data: return bot2.send_message(chat_id, "❌ No OTPs.")
+        msg = "📩 **Recent OTPs:**\n\n"
+        for o in r.data: msg += f"`{o['email']}` — `{o['code']}`\n"
         bot2.send_message(chat_id, msg, parse_mode='Markdown')
-    except Exception as e:
-        bot2.send_message(chat_id, f"Error: {e}")
+    except Exception as e: bot2.send_message(chat_id, f"Err: {e}")
 
-@bot2.message_handler(func=lambda message: message.text == '🗑 Delete OTPs')
+@bot2.message_handler(func=lambda m: m.text == '🗑 Delete OTPs')
 def delete_otps_bot(message):
-    chat_id = message.chat.id
-    if not is_authorized(chat_id): return
-
+    if not is_authorized(message.chat.id): return
     try:
         supabase.table("otps").delete().neq("id", 0).execute()
-        bot2.send_message(chat_id, "✅ All OTPs deleted from database!")
-    except Exception as e:
-        bot2.send_message(chat_id, f"Error: {e}")
+        bot2.send_message(message.chat.id, "✅ All OTPs deleted.")
+    except Exception as e: bot2.send_message(message.chat.id, f"Err: {e}")
 
 @bot2.message_handler(commands=['getcsv'])
-@bot2.message_handler(func=lambda message: message.text == '📁 Download Success')
-def send_csv_2(message):
-    chat_id = message.chat.id
-    if not is_authorized(chat_id): return
-
+@bot2.message_handler(func=lambda m: m.text == '📁 Download ALL Success')
+def send_csv_all(message):
+    if not is_authorized(message.chat.id): return
     try:
-        response = supabase.table("accounts").select("uid, password, cookie, full_combo").execute()
-        data = response.data
-        if not data: return bot2.send_message(chat_id, "❌ No Data.")
-
-        output = io.StringIO()
-        writer = csv.writer(output)
-        writer.writerow(['UID', 'PASSWORD', 'COOKIE', 'FULL_MAIL'])
-        for row in data:
-            writer.writerow([row.get('uid'), row.get('password'), row.get('cookie'), row.get('full_combo')])
-
-        mem = io.BytesIO()
-        mem.write(output.getvalue().encode('utf-8-sig'))
-        mem.seek(0)
-        bot2.send_document(chat_id, mem, visible_file_name="success.csv", caption="Here is your SUCCESS CSV.")
-    except Exception as e:
-        bot2.send_message(chat_id, f"Error: {e}")
+        rows = fetch_all_rows("accounts", "uid, password, cookie, full_combo")
+        if not rows: return bot2.send_message(message.chat.id, "❌ No Data.")
+        out = [[x.get('uid'), x.get('password'), x.get('cookie'), x.get('full_combo')] for x in rows]
+        mem = _write_csv(['UID', 'PASSWORD', 'COOKIE', 'FULL_MAIL'], out)
+        bot2.send_document(message.chat.id, mem, visible_file_name="all_success.csv", caption="All Success")
+    except Exception as e: bot2.send_message(message.chat.id, f"Err: {e}")
 
 @bot2.message_handler(commands=['getfailed'])
-@bot2.message_handler(func=lambda message: message.text == '❌ Download Failed')
-def send_failed_csv_2(message):
+@bot2.message_handler(func=lambda m: m.text == '❌ Download ALL Failed')
+def send_failed_all(message):
+    if not is_authorized(message.chat.id): return
+    try:
+        rows = fetch_all_rows("failed_accounts", "full_combo, reason")
+        if not rows: return bot2.send_message(message.chat.id, "❌ No Data.")
+        out = [[x.get('full_combo'), x.get('reason')] for x in rows]
+        mem = _write_csv(['FULL_MAIL', 'REASON'], out)
+        bot2.send_document(message.chat.id, mem, visible_file_name="all_failed.csv", caption="All Failed")
+    except Exception as e: bot2.send_message(message.chat.id, f"Err: {e}")
+
+@bot2.message_handler(func=lambda m: m.text == '📦 Batch Downloads')
+def batch_menu_bot(message):
     chat_id = message.chat.id
     if not is_authorized(chat_id): return
-
     try:
-        response = supabase.table("failed_accounts").select("full_combo, reason").execute()
-        data = response.data
-        if not data: return bot2.send_message(chat_id, "❌ No Data.")
+        acc = fetch_all_rows("accounts", "batch_id")
+        fail = fetch_all_rows("failed_accounts", "batch_id")
+        counts = {}
+        for row in acc:
+            b = row.get('batch_id')
+            if b is None: continue
+            counts.setdefault(b, {"s": 0, "f": 0})["s"] += 1
+        for row in fail:
+            b = row.get('batch_id')
+            if b is None: continue
+            counts.setdefault(b, {"s": 0, "f": 0})["f"] += 1
+        if not counts: return bot2.send_message(chat_id, "❌ No batches yet.")
+        mk = InlineKeyboardMarkup()
+        for bn in sorted(counts.keys(), reverse=True)[:30]:
+            c = counts[bn]
+            label = f"📜 Old (Batch #0) — ✅{c['s']} ❌{c['f']}" if bn == 0 else f"Batch #{bn} — ✅{c['s']} ❌{c['f']}"
+            mk.add(InlineKeyboardButton(label, callback_data=f"bi_{bn}"))
+        bot2.send_message(chat_id, "📦 **Select Batch:**", reply_markup=mk, parse_mode='Markdown')
+    except Exception as e: bot2.send_message(chat_id, f"Err: {e}")
 
-        output = io.StringIO()
-        writer = csv.writer(output)
-        writer.writerow(['FULL_MAIL', 'REASON'])
-        for row in data:
-            writer.writerow([row.get('full_combo'), row.get('reason')])
+@bot2.callback_query_handler(func=lambda c: c.data.startswith("bi_"))
+def batch_info_cb(call):
+    bn = int(call.data.split("_")[1])
+    mk = InlineKeyboardMarkup()
+    mk.add(InlineKeyboardButton("✅ Success CSV", callback_data=f"bs_{bn}"), InlineKeyboardButton("❌ Failed CSV", callback_data=f"bf_{bn}"))
+    mk.add(InlineKeyboardButton("🔙 Back", callback_data="bb"))
+    label = "📜 Old (Batch #0)" if bn == 0 else f"Batch #{bn}"
+    bot2.edit_message_text(f"📦 **{label}** — choose download:", call.message.chat.id, call.message.message_id, reply_markup=mk, parse_mode='Markdown')
 
-        mem = io.BytesIO()
-        mem.write(output.getvalue().encode('utf-8-sig'))
-        mem.seek(0)
-        bot2.send_document(chat_id, mem, visible_file_name="failed.csv", caption="Here is your FAILED CSV.")
+@bot2.callback_query_handler(func=lambda c: c.data.startswith("bs_") or c.data.startswith("bf_"))
+def batch_dl_cb(call):
+    parts = call.data.split("_")
+    is_s = parts[0] == "bs"
+    bn = int(parts[1])
+    chat_id = call.message.chat.id
+    try:
+        rows = []
+        offset = 0
+        tbl = "accounts" if is_s else "failed_accounts"
+        cols = "uid, password, cookie, full_combo" if is_s else "full_combo, reason"
+        while True:
+            r = supabase.table(tbl).select(cols).eq("batch_id", bn).range(offset, offset + 999).execute()
+            if not r.data: break
+            rows.extend(r.data)
+            if len(r.data) < 1000: break
+            offset += 1000
+        if not rows: return bot2.answer_callback_query(call.id, "No data.", show_alert=True)
+
+        if is_s:
+            out = [[x.get('uid'), x.get('password'), x.get('cookie'), x.get('full_combo')] for x in rows]
+            hdr = ['UID', 'PASSWORD', 'COOKIE', 'FULL_MAIL']; fn = f"batch_{bn}_success.csv"; cap = f"Batch #{bn} — Success"
+        else:
+            out = [[x.get('full_combo'), x.get('reason')] for x in rows]
+            hdr = ['FULL_MAIL', 'REASON']; fn = f"batch_{bn}_failed.csv"; cap = f"Batch #{bn} — Failed"
+        mem = _write_csv(hdr, out)
+        bot2.send_document(chat_id, mem, visible_file_name=fn, caption=cap)
+        bot2.answer_callback_query(call.id, "Sent!")
     except Exception as e:
-        bot2.send_message(chat_id, f"Error: {e}")
+        bot2.answer_callback_query(call.id, f"Err: {e}", show_alert=True)
 
+@bot2.callback_query_handler(func=lambda c: c.data == "bb")
+def batch_back_cb(call):
+    call.message.text = '📦 Batch Downloads'
+    batch_menu_bot(call.message)
 
 # ══════════════════════════════════════════════════════════
-# START FLASK & BOTH BOTS
+# START
 # ══════════════════════════════════════════════════════════
 if __name__ == '__main__':
     t1 = threading.Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080))))
     t1.daemon = True
     t1.start()
-
     t2 = threading.Thread(target=bot2.infinity_polling)
     t2.daemon = True
     t2.start()
-
-    print("App Server & Bots running with Supabase & Proxy...")
+    print("Running...")
     bot1.infinity_polling()
