@@ -26,18 +26,16 @@ except ImportError:
     exit()
 
 # ══════════════════════════════════════════════════════════
-# CONFIGURATIONS & DATABASE (Ekhane Supabase Link Boshao)
+# CONFIGURATIONS & DATABASE
 # ══════════════════════════════════════════════════════════
 BOT_TOKEN_1 = "9025360567:AAEJ2Jq2FSAVpDOVC3UCPYViQE9-sNI7NSk"
 BOT_TOKEN_2 = "9028640496:AAG8y-z28g98sjYfEjLC5yanhhA-YgP9zHQ"
 ADMIN_ID = "6408202140"
 WEB_PASSWORD = "SOHAV_ADMIN"
 
-# ══════════════════════════════════════════════════════════
-# SUPABASE SETUP
-# ══════════════════════════════════════════════════════════
-SUPABASE_URL = "https://plojfqqvqnddxibaxrqr.supabase.co" # <-- Tomar Project URL
-SUPABASE_KEY = "sb_publishable_TkViojZqhR4ViRLfwEZpqg_TgKTE3Ps" # <-- Tomar anon key
+# SUPABASE SETUP (Tomar deya link ar key)
+SUPABASE_URL = "https://plojfqqvqnddxibaxrqr.supabase.co"
+SUPABASE_KEY = "sb_publishable_TkViojZqhR4ViRLfwEZpqg_TgKTE3Ps"
 
 try:
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -52,7 +50,6 @@ bot2 = telebot.TeleBot(BOT_TOKEN_2)
 # ══════════════════════════════════════════════════════════
 IS_RUNNING = False
 CANCEL_FLAG = False
-WEB_OTPS = []
 
 # ══════════════════════════════════════════════════════════
 # 50 ANDROID & 4 iOS USER-AGENTS
@@ -202,17 +199,10 @@ def fetch_otp_from_hotmail(email_addr, refresh_token, client_id, chat_id=None):
                         
                         # Save to Supabase
                         try:
-                            supabase.table("otps").insert({
-                                "email": email_addr,
-                                "code": code
-                            }).execute()
+                            supabase.table("otps").insert({"email": email_addr, "code": code}).execute()
                         except Exception as e:
                             print(f"Supabase OTP Error: {e}")
 
-                        # Add to Web List
-                        WEB_OTPS.append({"email": email_addr, "code": code})
-                        add_web_log(f"OTP FOUND: {code} for {email_addr}", "green")
-                        
                         if chat_id: 
                             bot1.send_message(chat_id, f"📩 **OTP FOUND for `{email_addr}`**\n\n🔑 Code: `{code}`\n\n_Copied from Hotmail inbox!_", parse_mode='Markdown')
                         return 
@@ -399,22 +389,6 @@ def execute_batch(chat_id, email_data_list, password, lang, custom_name, use_pro
     CANCEL_FLAG = False
     success_count = 0; fail_count = 0
     WEB_STATE["total"] = len(email_data_list); WEB_STATE["success"] = 0
-    
-    # ══════════════════════════════════════════════════════
-    # PURONO DATA MUCHHE FELA (Clear previous data)
-    # ══════════════════════════════════════════════════════
-    try:
-        supabase.table("accounts").delete().neq("id", 0).execute()
-        supabase.table("failed_accounts").delete().neq("id", 0).execute()
-        supabase.table("otps").delete().neq("id", 0).execute()
-        
-        if not is_web and chat_id:
-            bot1.send_message(chat_id, "🧹 Purono data muchhe fela hoyeche notun batch er jonno.")
-        else:
-            add_web_log("Cleared old data from Supabase for new batch.", "yellow")
-    except Exception as e:
-        print(f"Database Clear Error: {e}")
-    # ══════════════════════════════════════════════════════
 
     def process_one(item, idx, total):
         nonlocal success_count, fail_count
@@ -546,12 +520,15 @@ HTML_TEMPLATE = """
         .btn-row .btn.success { background: #10b981; }
         .btn-row .btn.failed { background: #ef4444; }
         
+        /* OTP Section */
         #otp-container { display: none; background: #064e3b; border: 1px solid #10b981; padding: 15px; border-radius: 12px; margin-bottom: 15px; }
-        .otp-item { display: flex; justify-content: space-between; align-items: center; background: #0f172a; padding: 10px; border-radius: 8px; margin-bottom: 8px; border-left: 4px solid #10b981; }
+        .otp-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+        .otp-list-item { display: flex; justify-content: space-between; align-items: center; background: #0f172a; padding: 10px; border-radius: 8px; margin-bottom: 8px; border-left: 4px solid #10b981; }
         .otp-code { font-family: monospace; font-size: 18px; font-weight: bold; color: #4ade80; letter-spacing: 2px; }
         .otp-email { font-size: 11px; color: #94a3b8; display: block; margin-bottom: 4px; }
         .copy-btn { background: #0ea5e9; color: white; border: none; border-radius: 6px; padding: 6px 12px; font-size: 12px; font-weight: bold; cursor: pointer; }
         .copy-btn:active { background: #0284c7; }
+        .del-btn { background: #ef4444; color: white; border: none; border-radius: 6px; padding: 6px 12px; font-size: 12px; font-weight: bold; cursor: pointer; }
 
         #logs { background: #000; height: 200px; overflow-y: auto; padding: 10px; border-radius: 8px; font-family: monospace; font-size: 12px; border: 1px solid #334155; margin-top: 15px; color: #ccc; }
         .log-line { margin-bottom: 4px; }
@@ -565,14 +542,17 @@ HTML_TEMPLATE = """
 <body>
     <div class="header">
         <h1>🚀 Creator App</h1>
-        <span style="font-size:12px; color:#94a3b8;">v2.3</span>
+        <span style="font-size:12px; color:#94a3b8;">v2.4</span>
     </div>
     <div class="status-bar" id="status">Status: Idle</div>
 
     <div class="content" id="mainForm">
     
         <div id="otp-container">
-            <label style="color:#4ade80; margin-bottom:10px;">📩 Recent OTPs</label>
+            <div class="otp-header">
+                <label style="color:#4ade80; margin-bottom:0;">📩 Recent OTPs</label>
+                <button class="del-btn" onclick="deleteOTPs()">🗑 Delete</button>
+            </div>
             <div id="otp-list"></div>
         </div>
 
@@ -652,6 +632,12 @@ HTML_TEMPLATE = """
         });
     }
 
+    async function deleteOTPs() {
+        if(!confirm("Are you sure you want to delete all OTPs from database?")) return;
+        await fetch('/api/delete_otps', { method: 'POST' });
+        document.getElementById('otp-container').style.display = 'none';
+    }
+
     async function startBatch() {
         const rawEmails = document.getElementById('emails').value.trim();
         if (!rawEmails) return alert("Please enter emails!");
@@ -667,8 +653,6 @@ HTML_TEMPLATE = """
         document.getElementById('logs').innerHTML = '';
         document.getElementById('startBtn').style.display = 'none';
         document.getElementById('stopBtn').style.display = 'block';
-        document.getElementById('otp-container').style.display = 'none';
-        document.getElementById('otp-list').innerHTML = '';
 
         const res = await fetch('/api/start', {
             method: 'POST',
@@ -725,7 +709,7 @@ HTML_TEMPLATE = """
             document.getElementById('otp-container').style.display = 'block';
             const otpList = document.getElementById('otp-list');
             otpList.innerHTML = otps.map(o => `
-                <div class="otp-item">
+                <div class="otp-list-item">
                     <div>
                         <span class="otp-email">${o.email}</span>
                         <span class="otp-code">${o.code}</span>
@@ -733,6 +717,8 @@ HTML_TEMPLATE = """
                     <button class="copy-btn" onclick="copyCode('${o.code}')">Copy</button>
                 </div>
             `).join('');
+        } else {
+            document.getElementById('otp-container').style.display = 'none';
         }
     }, 3000);
 </script>
@@ -767,11 +753,24 @@ def get_status():
 @app.route('/api/otps')
 def get_otps():
     if not session.get('logged_in'): return jsonify({"error": "Unauthorized"}), 401
-    return jsonify(WEB_OTPS)
+    try:
+        response = supabase.table("otps").select("email, code").order("created_at", desc=True).limit(50).execute()
+        return jsonify(response.data)
+    except Exception:
+        return jsonify([])
+
+@app.route('/api/delete_otps', methods=['POST'])
+def api_delete_otps():
+    if not session.get('logged_in'): return jsonify({"error": "Unauthorized"}), 401
+    try:
+        supabase.table("otps").delete().neq("id", 0).execute()
+        return jsonify({"status": "success"})
+    except Exception as e:
+        return jsonify({"status": "error", "msg": str(e)}), 500
 
 @app.route('/api/start', methods=['POST'])
 def api_start():
-    global IS_RUNNING, WEB_LOGS, WEB_OTPS, CANCEL_FLAG
+    global IS_RUNNING, WEB_LOGS, CANCEL_FLAG
     if not session.get('logged_in'): return jsonify({"error": "Unauthorized"}), 401
     if IS_RUNNING: return jsonify({"error": "Already running"}), 400
     
@@ -803,7 +802,6 @@ def api_start():
     os_mode = data.get('os_mode', 'ios')
     
     WEB_LOGS = [] 
-    WEB_OTPS = []
     CANCEL_FLAG = False
     add_web_log(f"Starting process for {len(email_data_list)} accounts...", "cyan")
     threading.Thread(target=execute_batch, args=(None, email_data_list, password, lang, custom_name, use_proxy, os_mode, True)).start()
@@ -1032,11 +1030,12 @@ def start_batch_from_state(chat_id, state):
 
 
 # ══════════════════════════════════════════════════════════
-# BOT 2 LOGIC (DOWNLOAD BOT + OTP LIST)
+# BOT 2 LOGIC (DOWNLOAD BOT + OTP LIST & DELETE)
 # ══════════════════════════════════════════════════════════
 def get_main_menu_2(chat_id):
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add(KeyboardButton('📩 OTP List'))
+    markup.add(KeyboardButton('🗑 Delete OTPs'))
     markup.add(KeyboardButton('📁 Download Success'), KeyboardButton('❌ Download Failed'))
     if str(chat_id) == ADMIN_ID: markup.add(KeyboardButton('📊 Stats'))
     return markup
@@ -1053,21 +1052,29 @@ def show_otps(message):
     if not is_authorized(chat_id): return
     
     try:
-        response = supabase.table("otps").select("email, code").order("created_at", desc=True).limit(20).execute()
+        response = supabase.table("otps").select("email, code").order("created_at", desc=True).limit(50).execute()
         data = response.data
         if not data:
             return bot2.send_message(chat_id, "❌ No OTPs found yet.")
             
-        msg = "📩 **Recent OTPs:**\n\n"
+        msg = "📩 **Recent OTPs (Last 50):**\n\n"
         for o in data:
             msg += f"`{o['email']}` - `{o['code']}`\n"
             
         bot2.send_message(chat_id, msg, parse_mode='Markdown')
     except Exception as e:
-        if "PGRST125" in str(e):
-            bot2.send_message(chat_id, "❌ Database Error: `otps` table ta Supabase e toiri kora nei!")
-        else:
-            bot2.send_message(chat_id, f"Error: {e}")
+        bot2.send_message(chat_id, f"Error: {e}")
+
+@bot2.message_handler(func=lambda message: message.text == '🗑 Delete OTPs')
+def delete_otps_bot(message):
+    chat_id = message.chat.id
+    if not is_authorized(chat_id): return
+    
+    try:
+        supabase.table("otps").delete().neq("id", 0).execute()
+        bot2.send_message(chat_id, "✅ All OTPs deleted from database!")
+    except Exception as e:
+        bot2.send_message(chat_id, f"Error: {e}")
 
 @bot2.message_handler(commands=['getcsv'])
 @bot2.message_handler(func=lambda message: message.text == '📁 Download Success')
@@ -1091,10 +1098,7 @@ def send_csv_2(message):
         mem.seek(0)
         bot2.send_document(chat_id, mem, visible_file_name="success.csv", caption="Here is your SUCCESS CSV.")
     except Exception as e:
-        if "PGRST125" in str(e):
-            bot2.send_message(chat_id, "❌ Database Error: `accounts` table ta Supabase e toiri kora nei!")
-        else:
-            bot2.send_message(chat_id, f"Error: {e}")
+        bot2.send_message(chat_id, f"Error: {e}")
 
 @bot2.message_handler(commands=['getfailed'])
 @bot2.message_handler(func=lambda message: message.text == '❌ Download Failed')
@@ -1118,10 +1122,7 @@ def send_failed_csv_2(message):
         mem.seek(0)
         bot2.send_document(chat_id, mem, visible_file_name="failed.csv", caption="Here is your FAILED CSV.")
     except Exception as e:
-        if "PGRST125" in str(e):
-            bot2.send_message(chat_id, "❌ Database Error: `failed_accounts` table ta Supabase e toiri kora nei!")
-        else:
-            bot2.send_message(chat_id, f"Error: {e}")
+        bot2.send_message(chat_id, f"Error: {e}")
 
 
 # ══════════════════════════════════════════════════════════
