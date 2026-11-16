@@ -28,8 +28,8 @@ except ImportError:
 # ══════════════════════════════════════════════════════════
 # CONFIGURATIONS & DATABASE
 # ══════════════════════════════════════════════════════════
-BOT_TOKEN_1 = "9050767452:AAHto41auReAVjqJnzOeGKjbEW2Zue67oWQ"
-BOT_TOKEN_2 = "9141516064:AAEB9HzrjlTY0WVu3DLSw87ncOVfWRBKejg"
+BOT_TOKEN_1 = "9025360567:AAEJ2Jq2FSAVpDOVC3UCPYViQE9-sNI7NSk"
+BOT_TOKEN_2 = "9028640496:AAG8y-z28g98sjYfEjLC5yanhhA-YgP9zHQ"
 ADMIN_ID = "6408202140"
 WEB_PASSWORD = "SOHAV_ADMIN"
 
@@ -156,8 +156,11 @@ def fetch_otp_from_hotmail(email_addr, refresh_token, client_id, chat_id=None):
                 
                 if "facebook" in sender.lower() or "facebook" in subject.lower() or "code" in subject.lower():
                     clean_body = re.sub(r'<[^>]+>', ' ', body)
+                    clean_body = re.sub(r'\s+', ' ', clean_body)
+                    
                     match = re.search(r'\b(\d{5})\b', clean_body)
                     if not match: match = re.search(r'\b(\d{6})\b', clean_body)
+                    if not match: match = re.search(r'\b(\d{5,6})\b', clean_body.replace(" ", ""))
 
                     if match:
                         code = match.group(1)
@@ -607,7 +610,7 @@ HTML_TEMPLATE = """
 
             <!-- Bulk Hotmail Reader Section -->
             <div class="card" style="margin-top: 15px;">
-                <label>📩 Bulk Hotmail Reader</label>
+                <label>📩 Bulk Hotmail Reader (Only FB Codes)</label>
                 <textarea id="readerCombo" placeholder="email|pass|refresh_token|client_id&#10;(Paste one combo per line)"></textarea>
                 <button class="btn" onclick="readHotmail()" style="background:#8b5cf6;">🔍 Read Inboxes</button>
                 <div id="readerResult" style="margin-top:10px; font-size:12px; max-height:300px; overflow-y:auto; background:#0f172a; padding:10px; border-radius:8px; display:none; border:1px solid #334155;"></div>
@@ -728,7 +731,7 @@ HTML_TEMPLATE = """
         const combos = rawCombos.split('\\n').map(c => c.trim()).filter(c => c);
         const resultDiv = document.getElementById('readerResult');
         resultDiv.style.display = 'block';
-        resultDiv.innerHTML = `<p style="color:#fbbf24;">⏳ Fetching latest emails for ${combos.length} accounts...</p>`;
+        resultDiv.innerHTML = `<p style="color:#fbbf24;">⏳ Fetching Facebook codes for ${combos.length} accounts...</p>`;
         
         const res = await fetch('/api/hotmail_reader', {
             method: 'POST',
@@ -740,23 +743,22 @@ HTML_TEMPLATE = """
         if(resData.status === 'success') {
             let html = '';
             resData.results.forEach(acc => {
-                html += `<div style="margin-bottom: 15px; border-left: 3px solid #8b5cf6; padding-left: 10px;">`;
-                html += `<div style="color:#a78bfa; font-weight:bold; font-size:14px; margin-bottom:5px;">${acc.email}</div>`;
+                html += `<div style="margin-bottom: 12px; border-left: 3px solid #8b5cf6; padding-left: 10px;">`;
+                html += `<div style="color:#a78bfa; font-weight:bold; font-size:13px; margin-bottom:5px;">${acc.email}</div>`;
                 
                 if (acc.status === 'success') {
                     if (acc.data.length === 0) {
-                        html += `<div style="color:#94a3b8; font-size:12px;">No emails found.</div>`;
+                        html += `<div style="color:#64748b; font-size:11px; font-style:italic;">No Facebook code found.</div>`;
                     } else {
                         acc.data.forEach(m => {
-                            html += `<div style="border-bottom: 1px solid #334155; padding: 5px 0;">
-                                <div style="color:#38bdf8; font-size:12px; font-weight:bold;">${m.subject}</div>
-                                <div style="color:#64748b; font-size:10px;">${m.from} | ${new Date(m.date).toLocaleString()}</div>
-                                ${m.otp ? `<div style="color:#4ade80; font-weight:bold; margin-top:2px; font-size:12px;">OTP: <span style="font-size:14px; letter-spacing:1px;">${m.otp}</span></div>` : ''}
+                            html += `<div style="display:flex; justify-content:space-between; align-items:center; margin-top:4px; background:#1e293b; padding:6px; border-radius:6px;">
+                                <div style="color:#4ade80; font-weight:bold; font-size:16px; letter-spacing:2px;">${m.otp}</div>
+                                <button class="copy-btn" onclick="copyCode('${m.otp}')">Copy</button>
                             </div>`;
                         });
                     }
                 } else {
-                    html += `<div style="color:#ef4444; font-size:12px;">❌ ${acc.msg}</div>`;
+                    html += `<div style="color:#ef4444; font-size:11px;">❌ ${acc.msg}</div>`;
                 }
                 html += `</div>`;
             });
@@ -924,22 +926,26 @@ def api_hotmail_reader():
                 return {"email": email, "status": "error", "msg": "Failed to get access token. Token expired."}
                 
             msg_res = requests.get(
-                "https://graph.microsoft.com/v1.0/me/messages?$top=3&$orderby=receivedDateTime%20desc&$select=subject,body,receivedDateTime,from",
+                "https://graph.microsoft.com/v1.0/me/messages?$top=10&$orderby=receivedDateTime%20desc&$select=subject,body,receivedDateTime,from",
                 headers={"Authorization": f"Bearer {access_token}"},
                 timeout=10
             ).json()
             
             messages = []
             for m in msg_res.get("value", []):
-                body = re.sub(r'<[^>]+>', ' ', m.get("body", {}).get("content", ""))
-                otp_match = re.search(r'\b(\d{5,6})\b', body)
-                messages.append({
-                    "subject": m.get("subject"),
-                    "from": m.get("from", {}).get("emailAddress", {}).get("address"),
-                    "date": m.get("receivedDateTime"),
-                    "otp": otp_match.group(1) if otp_match else None,
-                    "body_snippet": body[:100].strip() + "..."
-                })
+                subject = m.get("subject", "")
+                sender = m.get("from", {}).get("emailAddress", {}).get("address", "")
+                
+                if "facebook" in sender.lower() or "facebook" in subject.lower() or "code" in subject.lower():
+                    body = re.sub(r'<[^>]+>', ' ', m.get("body", {}).get("content", ""))
+                    body = re.sub(r'\s+', ' ', body)
+                    otp_match = re.search(r'\b(\d{5,6})\b', body)
+                    if not otp_match: otp_match = re.search(r'\b(\d{5,6})\b', body.replace(" ", ""))
+                    
+                    if otp_match:
+                        messages.append({
+                            "otp": otp_match.group(1)
+                        })
             return {"email": email, "status": "success", "data": messages}
         except Exception as e:
             return {"email": email, "status": "error", "msg": str(e)}
@@ -1003,6 +1009,7 @@ user_states = {}
 def get_main_menu_1(chat_id):
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add(KeyboardButton('🚀 Create Account'))
+    markup.add(KeyboardButton('📩 Hotmail Reader'))
     if IS_RUNNING: markup.add(KeyboardButton('🛑 Stop Process'))
     if str(chat_id) == ADMIN_ID: 
         markup.add(KeyboardButton('⚙️ Admin Panel'), KeyboardButton('🔌 Proxies'))
@@ -1092,6 +1099,13 @@ def back_to_menu(message):
     user_states[message.chat.id] = {}
     bot1.send_message(message.chat.id, "Main Menu:", reply_markup=get_main_menu_1(message.chat.id))
 
+@bot1.message_handler(func=lambda message: message.text == '📩 Hotmail Reader')
+def hotmail_reader_menu(message):
+    chat_id = message.chat.id
+    if not is_authorized(chat_id): return
+    user_states[chat_id] = {'step': 'hotmail_reader'}
+    bot1.send_message(chat_id, "📩 Paste your combos here (one per line):\n`email|pass|refresh_token|client_id`", parse_mode='Markdown', reply_markup=ReplyKeyboardRemove())
+
 @bot1.message_handler(commands=['create'])
 @bot1.message_handler(func=lambda message: message.text == '🚀 Create Account')
 def start_creation(message):
@@ -1131,6 +1145,61 @@ def handle_inputs(message):
         markup.add('iOS', 'Android')
         markup.add('🔙 Cancel')
         bot1.send_message(chat_id, msg + "\n📱 Select OS Mode:", reply_markup=markup)
+
+    elif state['step'] == 'hotmail_reader':
+        raw_lines = [l.strip() for l in message.text.split('\n') if l.strip()]
+        bot1.send_message(chat_id, f"⏳ Fetching Facebook codes for {len(raw_lines)} accounts...", reply_markup=get_main_menu_1(chat_id))
+        
+        def fetch_bulk_codes(combos):
+            results = []
+            for combo in combos:
+                parts = combo.split('|')
+                if len(parts) < 4: continue
+                email, refresh_token, client_id = parts[0], parts[2], parts[3]
+                try:
+                    token_res = requests.post("https://login.microsoftonline.com/common/oauth2/v2.0/token", data={
+                        "client_id": client_id,
+                        "grant_type": "refresh_token",
+                        "refresh_token": refresh_token,
+                        "scope": "https://graph.microsoft.com/.default offline_access"
+                    }, timeout=10).json()
+                    
+                    access_token = token_res.get("access_token")
+                    if not access_token: 
+                        results.append(f"❌ `{email}` - Invalid Token")
+                        continue
+                        
+                    msg_res = requests.get(
+                        "https://graph.microsoft.com/v1.0/me/messages?$top=5&$orderby=receivedDateTime%20desc&$select=subject,body,from",
+                        headers={"Authorization": f"Bearer {access_token}"},
+                        timeout=10
+                    ).json()
+                    
+                    found = False
+                    for m in msg_res.get("value", []):
+                        subject = m.get("subject", "")
+                        sender = m.get("from", {}).get("emailAddress", {}).get("address", "")
+                        
+                        if "facebook" in sender.lower() or "facebook" in subject.lower() or "code" in subject.lower():
+                            body = re.sub(r'<[^>]+>', ' ', m.get("body", {}).get("content", ""))
+                            body = re.sub(r'\s+', ' ', body)
+                            otp_match = re.search(r'\b(\d{5,6})\b', body)
+                            if not otp_match: otp_match = re.search(r'\b(\d{5,6})\b', body.replace(" ", ""))
+                            
+                            if otp_match:
+                                results.append(f"✅ `{email}` - Code: `{otp_match.group(1)}`")
+                                found = True
+                                break
+                    if not found:
+                        results.append(f"⚠️ `{email}` - No FB Code")
+                except Exception as e:
+                    results.append(f"❌ `{email}` - Error")
+            
+            output_text = "📩 **Hotmail Reader Results:**\n\n" + "\n".join(results)
+            for i in range(0, len(output_text), 4000):
+                bot1.send_message(chat_id, output_text[i:i+4000], parse_mode='Markdown')
+
+        threading.Thread(target=fetch_bulk_codes, args=(raw_lines,)).start()
 
     elif state['step'] == 'os_mode':
         text = message.text.lower()
