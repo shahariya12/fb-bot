@@ -15,10 +15,6 @@ import csv
 import datetime
 import requests
 import io
-import imaplib
-import poplib
-import email
-import base64
 from concurrent.futures import ThreadPoolExecutor
 from flask import Flask, request, jsonify, send_file, render_template_string, session, redirect, url_for
 from supabase import create_client, Client
@@ -177,38 +173,39 @@ def fetch_otp_from_hotmail(email_addr, refresh_token, client_id, chat_id=None):
             return 
 
 # ══════════════════════════════════════════════════════════
-# MANUAL READER VIA API (smaill1s.com)
+# MANUAL READER VIA API (dongvanfb.net)
 # ══════════════════════════════════════════════════════════
-def get_code_via_api(combo, mode="graph"):
+def get_code_via_api(combo, code_type="facebook"):
     try:
         parts = combo.split('|')
         if len(parts) < 4: 
             return None, "Invalid combo (need 4 parts)"
         
-        email = parts[0]
-        refresh_token = parts[2]
-        client_id = parts[3]
-        
-        data_str = f"{email}|{refresh_token}|{client_id}"
+        email = parts[0].strip()
+        refresh_token = parts[2].strip()
+        client_id = parts[3].strip()
         
         payload = {
-            "mode": mode,
-            "data": data_str
+            "email": email,
+            "refresh_token": refresh_token,
+            "client_id": client_id,
+            "type": code_type
         }
         
-        res = requests.post("https://smaill1s.com/get_messages", json=payload, timeout=20)
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+        }
+        
+        res = requests.post("https://tools.dongvanfb.net/api/get_code_oauth2", json=payload, headers=headers, timeout=20)
+        
         if res.status_code == 200:
             res_json = res.json()
-            if "data" in res_json and len(res_json["data"]) > 0:
-                acc_data = res_json["data"][0]
-                if acc_data.get("error"):
-                    return None, str(acc_data["error"])
-                messages = acc_data.get("messages", [])
-                for msg in messages:
-                    if msg.get("code"):
-                        return msg["code"], None
-                return None, "No FB Code"
-            return None, "API returned empty data"
+            if res_json.get("status") is True and "code" in res_json:
+                return res_json["code"], None
+            else:
+                msg = res_json.get("message", res_json.get("content", "No code found"))
+                return None, str(msg)
         return None, f"API Error: {res.status_code}"
     except Exception as e:
         return None, str(e)
@@ -646,11 +643,15 @@ HTML_TEMPLATE = """
 
             <!-- Bulk Hotmail Reader Section -->
             <div class="card" style="margin-top: 15px;">
-                <label>📩 Bulk Hotmail Reader (Only FB Codes)</label>
-                <label style="margin-top:5px; color:#a78bfa;">Protocol</label>
-                <select id="readerProtocol">
-                    <option value="graph">Graph API</option>
-                    <option value="oauth">OAuth2 (IMAP/POP3)</option>
+                <label>📩 Bulk Hotmail Reader (API)</label>
+                <label style="margin-top:5px; color:#a78bfa;">Code Type</label>
+                <select id="readerType">
+                    <option value="facebook">Facebook</option>
+                    <option value="all">All (Any Code)</option>
+                    <option value="instagram">Instagram</option>
+                    <option value="twitter">Twitter</option>
+                    <option value="tiktok">TikTok</option>
+                    <option value="google">Google</option>
                 </select>
                 <textarea id="readerCombo" placeholder="email|pass|refresh_token|client_id&#10;(Paste one combo per line)"></textarea>
                 <button class="btn" onclick="readHotmail()" style="background:#8b5cf6;">🔍 Read Inboxes</button>
@@ -769,16 +770,16 @@ HTML_TEMPLATE = """
         const rawCombos = document.getElementById('readerCombo').value.trim();
         if(!rawCombos) return alert("Enter combos (one per line)");
         
-        const protocol = document.getElementById('readerProtocol').value;
+        const codeType = document.getElementById('readerType').value;
         const combos = rawCombos.split('\\n').map(c => c.trim()).filter(c => c);
         const resultDiv = document.getElementById('readerResult');
         resultDiv.style.display = 'block';
-        resultDiv.innerHTML = `<p style="color:#fbbf24;">⏳ Fetching Facebook codes via API (${protocol.toUpperCase()}) for ${combos.length} accounts...</p>`;
+        resultDiv.innerHTML = `<p style="color:#fbbf24;">⏳ Fetching ${codeType.toUpperCase()} codes for ${combos.length} accounts...</p>`;
         
         const res = await fetch('/api/hotmail_reader', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ combos: combos, protocol: protocol })
+            body: JSON.stringify({ combos: combos, type: codeType })
         });
         const resData = await res.json();
         
@@ -790,7 +791,7 @@ HTML_TEMPLATE = """
                 
                 if (acc.status === 'success') {
                     if (acc.data.length === 0) {
-                        html += `<div style="color:#64748b; font-size:11px; font-style:italic;">No Facebook code found.</div>`;
+                        html += `<div style="color:#64748b; font-size:11px; font-style:italic;">No code found.</div>`;
                     } else {
                         acc.data.forEach(m => {
                             html += `<div style="display:flex; justify-content:space-between; align-items:center; margin-top:4px; background:#1e293b; padding:6px; border-radius:6px;">
@@ -940,7 +941,7 @@ def api_hotmail_reader():
     if not session.get('logged_in'): return jsonify({"error": "Unauthorized"}), 401
     data = request.json
     combos = data.get('combos', [])
-    protocol = data.get('protocol', 'graph')
+    code_type = data.get('type', 'facebook')
     
     if not combos:
         return jsonify({"status": "error", "msg": "No combos provided"})
@@ -949,7 +950,7 @@ def api_hotmail_reader():
 
     def process_combo(combo):
         email_addr = combo.split('|')[0] if len(combo.split('|')) > 0 else combo
-        code, error = get_code_via_api(combo, mode=protocol)
+        code, error = get_code_via_api(combo, code_type=code_type)
         
         if error:
             return {"email": email_addr, "status": "error", "msg": error}
@@ -1113,8 +1114,13 @@ def back_to_menu(message):
 def hotmail_reader_menu(message):
     chat_id = message.chat.id
     if not is_authorized(chat_id): return
-    user_states[chat_id] = {'step': 'hotmail_reader'}
-    bot1.send_message(chat_id, "📩 Paste your combos here (one per line):\n`email|pass|refresh_token|client_id`", parse_mode='Markdown', reply_markup=ReplyKeyboardRemove())
+    user_states[chat_id] = {'step': 'reader_type'}
+    
+    markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
+    markup.add('Facebook', 'All (Any Code)')
+    markup.add('Instagram', 'Google')
+    markup.add('🔙 Cancel')
+    bot1.send_message(chat_id, "📩 **Select Code Type for Reader:**", reply_markup=markup)
 
 @bot1.message_handler(commands=['create'])
 @bot1.message_handler(func=lambda message: message.text == '🚀 Create Account')
@@ -1138,7 +1144,21 @@ def handle_inputs(message):
     if chat_id not in user_states: return
     state = user_states[chat_id]
 
-    if state['step'] == 'emails':
+    if state['step'] == 'reader_type':
+        text = message.text.lower()
+        if 'facebook' in text: state['reader_type'] = 'facebook'
+        elif 'all' in text: state['reader_type'] = 'all'
+        elif 'instagram' in text: state['reader_type'] = 'instagram'
+        elif 'google' in text: state['reader_type'] = 'google'
+        elif 'cancel' in text:
+            del user_states[chat_id]
+            return bot1.send_message(chat_id, "Cancelled.", reply_markup=get_main_menu_1(chat_id))
+        else: return bot1.send_message(chat_id, "❌ Select from buttons.")
+        
+        state['step'] = 'hotmail_reader'
+        bot1.send_message(chat_id, f"✅ Type set to **{state['reader_type'].upper()}**.\n\nPaste your combos here (one per line):\n`email|pass|refresh_token|client_id`", parse_mode='Markdown', reply_markup=ReplyKeyboardRemove())
+
+    elif state['step'] == 'emails':
         raw_lines = [l.strip() for l in message.text.split('\n') if l.strip()]
         email_data_list = []
         for line in raw_lines:
@@ -1158,22 +1178,23 @@ def handle_inputs(message):
 
     elif state['step'] == 'hotmail_reader':
         raw_lines = [l.strip() for l in message.text.split('\n') if l.strip()]
-        bot1.send_message(chat_id, f"⏳ Fetching Facebook codes via API for {len(raw_lines)} accounts...", reply_markup=get_main_menu_1(chat_id))
+        code_type = state.get('reader_type', 'facebook')
+        bot1.send_message(chat_id, f"⏳ Fetching {code_type.upper()} codes via API for {len(raw_lines)} accounts...", reply_markup=get_main_menu_1(chat_id))
         
         def fetch_bulk_codes(combos):
             results = []
             for combo in combos:
                 email_addr = combo.split('|')[0] if len(combo.split('|')) > 0 else combo
-                code, error = get_code_via_api(combo, mode="graph")
+                code, error = get_code_via_api(combo, code_type=code_type)
                 
                 if code:
                     results.append(f"✅ `{email_addr}` - Code: `{code}`")
                 elif error:
                     results.append(f"❌ `{email_addr}` - {error}")
                 else:
-                    results.append(f"⚠️ `{email_addr}` - No FB Code")
+                    results.append(f"⚠️ `{email_addr}` - No Code")
             
-            output_text = "📩 **Hotmail Reader Results:**\n\n" + "\n".join(results)
+            output_text = f"📩 **Hotmail Reader Results ({code_type.upper()}):**\n\n" + "\n".join(results)
             for i in range(0, len(output_text), 4000):
                 bot1.send_message(chat_id, output_text[i:i+4000], parse_mode='Markdown')
 
