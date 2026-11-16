@@ -28,8 +28,8 @@ except ImportError:
 # ══════════════════════════════════════════════════════════
 # CONFIGURATIONS & DATABASE
 # ══════════════════════════════════════════════════════════
-BOT_TOKEN_1 = "9025360567:AAEJ2Jq2FSAVpDOVC3UCPYViQE9-sNI7NSk"
-BOT_TOKEN_2 = "9028640496:AAG8y-z28g98sjYfEjLC5yanhhA-YgP9zHQ"
+BOT_TOKEN_1 = "9141516064:AAEB9HzrjlTY0WVu3DLSw87ncOVfWRBKejg"
+BOT_TOKEN_2 = "9141516064:AAEB9HzrjlTY0WVu3DLSw87ncOVfWRBKejg"
 ADMIN_ID = "6408202140"
 WEB_PASSWORD = "SOHAV_ADMIN"
 
