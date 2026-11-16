@@ -49,6 +49,7 @@ bot2 = telebot.TeleBot(BOT_TOKEN_2)
 # ══════════════════════════════════════════════════════════
 IS_RUNNING = False
 CANCEL_FLAG = False
+CURRENT_BATCH_ID = 0
 WEB_LOGS = []
 WEB_STATE = {"total": 0, "success": 0, "current": 0}
 
@@ -232,6 +233,7 @@ def warmup_session(session, fp, proxy):
     steps = ["https://www.facebook.com/", f"{FB_REG_BASE}/reg/?cid=103"]
     collected, last_lsd = {}, "AdS-QY2mYrCcHP7sVf7ynTA6vTc"
     for url in steps:
+        if CANCEL_FLAG: return {}, ""
         try:
             r = session.get(url, headers=fp["headers"], impersonate=fp["impersonate"], proxies=proxy, timeout=20)
             time.sleep(random.uniform(1.5, 3.5))
@@ -247,7 +249,10 @@ def fb_create_account(email, password, lang_code, custom_fname, custom_lname, pr
     
     fp = build_fingerprint(os_type)
     cookies_warm, lsd_token = warmup_session(session, fp, proxy_dict)
+    if CANCEL_FLAG: return (None, 'CANCELLED')
+    
     time.sleep(random.uniform(2.0, 4.0))
+    if CANCEL_FLAG: return (None, 'CANCELLED')
 
     reg_fp = build_fingerprint(os_type)
     try:
@@ -281,6 +286,8 @@ def fb_create_account(email, password, lang_code, custom_fname, custom_lname, pr
         })
 
         time.sleep(random.uniform(3.0, 6.0))
+        if CANCEL_FLAG: return (None, 'CANCELLED')
+        
         r = session.post(f"{FB_REG_BASE}/reg/submit/?app_id=103&multi_step_form=1", headers=headers, data=data, impersonate=reg_fp["impersonate"], proxies=proxy_dict, timeout=30)
     except Exception as e:
         return (None, f'POST_FAIL (Check Proxy/Net)')
@@ -312,8 +319,12 @@ def resend_otp(session, uid, proxy):
         return (res.status_code == 200 and "errors" not in res.text)
     except Exception: return False
 
-def execute_batch(chat_id, email_data_list, password, lang, custom_name, use_proxy, os_type, is_web=False):
-    global IS_RUNNING, WEB_STATE, CANCEL_FLAG
+def execute_batch(chat_id, email_data_list, password, lang, custom_name, hotmail_name, use_proxy, os_type, is_web=False):
+    global IS_RUNNING, WEB_STATE, CANCEL_FLAG, CURRENT_BATCH_ID
+    
+    CURRENT_BATCH_ID += 1
+    my_batch_id = CURRENT_BATCH_ID
+    
     IS_RUNNING = True
     CANCEL_FLAG = False
     success_count = 0; fail_count = 0
@@ -334,20 +345,36 @@ def execute_batch(chat_id, email_data_list, password, lang, custom_name, use_pro
         random.shuffle(proxies)
         for i in range(len(email_data_list)):
             p = proxies[i % len(proxies)].split(':')
-            if len(p) == 4: proxy_dicts.append({'http': f'http://{p[2]}:{p[3]}@{p[0]}:{p[1]}', 'https': f'http://{p[2]}:{p[3]}@{p[0]}:{p[1]}'})
-            elif len(p) == 2: proxy_dicts.append({'http': f'http://{p[0]}:{p[1]}', 'https': f'http://{p[0]}:{p[1]}'})
-            else: proxy_dicts.append(None)
+            if len(p) == 4: 
+                proxy_dicts.append({'http': f'http://{p[2]}:{p[3]}@{p[0]}:{p[1]}', 'https': f'http://{p[2]}:{p[3]}@{p[0]}:{p[1]}'})
+            elif len(p) == 3: 
+                proxy_dicts.append({'http': f'http://{p[2]}@{p[0]}:{p[1]}', 'https': f'http://{p[2]}@{p[0]}:{p[1]}'})
+            elif len(p) == 2: 
+                proxy_dicts.append({'http': f'http://{p[0]}:{p[1]}', 'https': f'http://{p[0]}:{p[1]}'})
+            else: 
+                proxy_dicts.append(None)
     else:
         proxy_dicts = [None] * len(email_data_list)
 
     def process_one(item, idx, total):
         nonlocal success_count, fail_count
-        if CANCEL_FLAG: return
+        if CANCEL_FLAG or my_batch_id != CURRENT_BATCH_ID: return
         WEB_STATE["current"] = idx
         email = item['email']; full_combo = item['full_combo']
-        c_fname = custom_name[0] if custom_name else None; c_lname = custom_name[1] if custom_name else None
         
-        # Get the assigned proxy for this specific index
+        # Determine name based on email type
+        is_hotmail = any(domain in email.lower() for domain in ["@hotmail.", "@outlook.", "@live.", "@msn."])
+        
+        c_fname, c_lname = None, None
+        if is_hotmail and hotmail_name:
+            parts = hotmail_name.split(' ', 1)
+            c_fname = parts[0]
+            c_lname = parts[1] if len(parts) > 1 else "User"
+        elif not is_hotmail and custom_name:
+            parts = custom_name.split(' ', 1)
+            c_fname = parts[0]
+            c_lname = parts[1] if len(parts) > 1 else "User"
+        
         assigned_proxy = proxy_dicts[idx - 1]
         proxy_ip = list(assigned_proxy.values())[0].split('@')[-1] if assigned_proxy else "Direct IP"
         
@@ -359,6 +386,8 @@ def execute_batch(chat_id, email_data_list, password, lang, custom_name, use_pro
         
         res, err = fb_create_account(email, password, lang, c_fname, c_lname, assigned_proxy, os_type)
         
+        if CANCEL_FLAG or my_batch_id != CURRENT_BATCH_ID: return
+
         if res:
             success_count += 1; WEB_STATE["success"] = success_count
             
@@ -404,6 +433,9 @@ def execute_batch(chat_id, email_data_list, password, lang, custom_name, use_pro
     with ThreadPoolExecutor(max_workers=len(email_data_list)) as executor:
         futures = [executor.submit(process_one, item, i+1, len(email_data_list)) for i, item in enumerate(email_data_list)]
         for future in futures: future.result()
+
+    if my_batch_id != CURRENT_BATCH_ID:
+        return
 
     IS_RUNNING = False
     if CANCEL_FLAG:
@@ -461,7 +493,8 @@ HTML_TEMPLATE = """
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; padding-bottom: 80px; }
         .header { background: #1e293b; padding: 15px 20px; position: sticky; top: 0; z-index: 100; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }
         .header h1 { font-size: 18px; margin: 0; color: #38bdf8; }
-        .status-bar { padding: 10px 20px; font-size: 13px; font-weight: bold; text-align: center; background: #334155; color: white; }
+        .header button { background: none; border: none; color: #38bdf8; font-size: 20px; cursor: pointer; }
+        .status-bar { padding: 10px 20px; font-size: 13px; font-weight: bold; text-align: center; background: #334155; color: white; transition: background 0.3s; }
         .content { padding: 20px; }
         .card { background: #1e293b; padding: 15px; border-radius: 12px; margin-bottom: 15px; }
         label { display: block; font-size: 13px; color: #94a3b8; margin-bottom: 8px; font-weight: 600; }
@@ -469,6 +502,7 @@ HTML_TEMPLATE = """
         textarea { resize: vertical; min-height: 100px; }
         .btn { width: 100%; padding: 14px; background: #0ea5e9; color: white; border: none; border-radius: 10px; font-weight: bold; font-size: 16px; cursor: pointer; }
         .btn.stop { background: #ef4444; display: none; }
+        .btn.refresh { background: #6366f1; margin-top: 10px; }
         .btn:active { opacity: 0.8; }
         .btn-row { display: flex; gap: 10px; margin-top: 10px; }
         .btn-row .btn { flex: 1; font-size: 14px; padding: 12px; }
@@ -497,7 +531,7 @@ HTML_TEMPLATE = """
 <body>
     <div class="header">
         <h1>🚀 Creator App</h1>
-        <span style="font-size:12px; color:#94a3b8;">v2.7</span>
+        <button onclick="window.location.reload()">🔄</button>
     </div>
     <div class="status-bar" id="status">Status: Idle</div>
 
@@ -537,12 +571,15 @@ HTML_TEMPLATE = """
                     <option value="yes">Use Proxy (Auto)</option>
                 </select>
 
-                <label>Name Mode</label>
+                <label>Name Mode (.com Emails)</label>
                 <select id="nameMode" onchange="toggleName()">
-                    <option value="auto">Auto Name</option>
+                    <option value="auto">Auto Name (Language)</option>
                     <option value="custom">Custom Name</option>
                 </select>
                 <input type="text" id="customName" placeholder="Firstname Lastname" style="display:none;">
+
+                <label>Hotmail Reader Name (Optional)</label>
+                <input type="text" id="hotmailName" placeholder="Firstname Lastname (Empty = Auto)">
 
                 <label>Language</label>
                 <select id="lang">
@@ -554,6 +591,7 @@ HTML_TEMPLATE = """
 
                 <button class="btn" id="startBtn" onclick="startBatch()">▶ START PROCESS</button>
                 <button class="btn stop" id="stopBtn" onclick="stopBatch()">🛑 STOP PROCESS</button>
+                <button class="btn refresh" onclick="window.location.reload()">🔄 Refresh Page</button>
             </div>
 
             <div class="card">
@@ -645,6 +683,7 @@ HTML_TEMPLATE = """
         const proxyMode = document.getElementById('proxyMode').value;
         const nameMode = document.getElementById('nameMode').value;
         const customName = document.getElementById('customName').value;
+        const hotmailName = document.getElementById('hotmailName').value;
         const lang = document.getElementById('lang').value;
 
         document.getElementById('logs').innerHTML = '';
@@ -662,6 +701,7 @@ HTML_TEMPLATE = """
                 proxy_mode: proxyMode,
                 name_mode: nameMode,
                 custom_name: customName,
+                hotmail_name: hotmailName,
                 lang: lang
             })
         });
@@ -776,10 +816,8 @@ def api_start():
         if not password: return jsonify({"error": "Password required"}), 400
 
     use_proxy = data['proxy_mode'] == 'yes'
-    custom_name = None
-    if data['name_mode'] == 'custom' and data.get('custom_name'):
-        parts = data['custom_name'].split(' ')
-        if len(parts) >= 2: custom_name = (parts[0], " ".join(parts[1:]))
+    custom_name = data.get('custom_name', '') if data.get('name_mode') == 'custom' else ''
+    hotmail_name = data.get('hotmail_name', '').strip()
         
     lang = data.get('lang', 'us')
     os_mode = data.get('os_mode', 'ios')
@@ -787,14 +825,16 @@ def api_start():
     WEB_LOGS = [] 
     CANCEL_FLAG = False
     add_web_log(f"Starting process for {len(email_data_list)} accounts...", "cyan")
-    threading.Thread(target=execute_batch, args=(None, email_data_list, password, lang, custom_name, use_proxy, os_mode, True)).start()
+    threading.Thread(target=execute_batch, args=(None, email_data_list, password, lang, custom_name, hotmail_name, use_proxy, os_mode, True)).start()
     return jsonify({"status": "started"})
 
 @app.route('/api/stop', methods=['POST'])
 def api_stop():
-    global CANCEL_FLAG
+    global CANCEL_FLAG, IS_RUNNING, CURRENT_BATCH_ID
     if not session.get('logged_in'): return jsonify({"error": "Unauthorized"}), 401
     CANCEL_FLAG = True
+    IS_RUNNING = False
+    CURRENT_BATCH_ID += 1
     add_web_log("🛑 Stop requested by user...", "red")
     return jsonify({"status": "stopping"})
 
@@ -863,9 +903,11 @@ def send_welcome_1(message):
 
 @bot1.message_handler(func=lambda message: message.text == '🛑 Stop Process')
 def stop_process(message):
-    global CANCEL_FLAG
+    global CANCEL_FLAG, IS_RUNNING, CURRENT_BATCH_ID
     CANCEL_FLAG = True
-    bot1.send_message(message.chat.id, "🛑 **Stopping...**", reply_markup=ReplyKeyboardRemove())
+    IS_RUNNING = False
+    CURRENT_BATCH_ID += 1 
+    bot1.send_message(message.chat.id, "🛑 **Stopping...**", reply_markup=get_main_menu_1(message.chat.id))
 
 @bot1.message_handler(func=lambda message: message.text == '🔌 Proxies')
 def proxy_menu(message):
@@ -895,7 +937,7 @@ def save_proxy(message):
         
     added = 0
     failed = 0
-    last_err = ""
+    errors = []
     
     for line in lines:
         try:
@@ -903,14 +945,15 @@ def save_proxy(message):
             added += 1
         except Exception as e:
             failed += 1
-            last_err = str(e)
+            errors.append(str(e))
             
     user_states[chat_id] = {}
     
     if added > 0:
         bot1.send_message(chat_id, f"✅ Added {added} proxies to database.\n{f'Failed: {failed}' if failed else ''}", reply_markup=get_main_menu_1(chat_id))
     else:
-        bot1.send_message(chat_id, f"❌ Failed to add proxies.\nError: {last_err}", reply_markup=get_main_menu_1(chat_id))
+        err_msg = errors[0] if errors else "Unknown error"
+        bot1.send_message(chat_id, f"❌ Failed to add proxies.\nError: {err_msg}", reply_markup=get_main_menu_1(chat_id))
 
 @bot1.message_handler(func=lambda message: message.text == '👀 View Proxies')
 def view_proxies(message):
@@ -944,6 +987,12 @@ def start_creation(message):
     if IS_RUNNING: return bot1.send_message(chat_id, "⚠️ Process running!")
     user_states[chat_id] = {'step': 'emails'}
     bot1.send_message(chat_id, "📧 Paste emails:", reply_markup=ReplyKeyboardRemove())
+
+def show_hotmail_name_menu(chat_id):
+    markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
+    markup.add('Auto Name', 'Custom Name')
+    markup.add('🔙 Cancel')
+    bot1.send_message(chat_id, "📧 Select Name Mode for Hotmail Emails (Hotmail/Outlook):", reply_markup=markup)
 
 @bot1.message_handler(func=lambda message: True)
 def handle_inputs(message):
@@ -1018,28 +1067,43 @@ def handle_inputs(message):
         else: next_step = False; bot1.send_message(chat_id, "❌ Select from buttons.")
 
         if next_step:
-            state['step'] = 'name_mode'
+            state['step'] = 'name_mode_com'
             markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
             markup.add('Auto Name', 'Custom Name')
             markup.add('🔙 Cancel')
-            bot1.send_message(chat_id, "👤 Select Name Mode:", reply_markup=markup)
+            bot1.send_message(chat_id, "👤 Select Name Mode for .com Emails (Gmail, Yahoo):", reply_markup=markup)
 
-    elif state['step'] == 'name_mode':
+    elif state['step'] == 'name_mode_com':
         if message.text == 'Custom Name':
-            state['step'] = 'custom_name'
-            bot1.send_message(chat_id, "✍️ Send: Firstname Lastname", reply_markup=ReplyKeyboardRemove())
+            state['step'] = 'custom_name_com'
+            bot1.send_message(chat_id, "✍️ Send .com Name: Firstname Lastname", reply_markup=ReplyKeyboardRemove())
         elif 'Cancel' in message.text:
             del user_states[chat_id]
             return bot1.send_message(chat_id, "Cancelled.", reply_markup=get_main_menu_1(chat_id))
         else:
-            state['custom_name'] = None
+            state['custom_name'] = ''
+            state['step'] = 'name_mode_hotmail'
+            show_hotmail_name_menu(chat_id)
+
+    elif state['step'] == 'custom_name_com':
+        state['custom_name'] = message.text.strip()
+        state['step'] = 'name_mode_hotmail'
+        show_hotmail_name_menu(chat_id)
+
+    elif state['step'] == 'name_mode_hotmail':
+        if message.text == 'Custom Name':
+            state['step'] = 'custom_name_hotmail'
+            bot1.send_message(chat_id, "✍️ Send Hotmail Name: Firstname Lastname", reply_markup=ReplyKeyboardRemove())
+        elif 'Cancel' in message.text:
+            del user_states[chat_id]
+            return bot1.send_message(chat_id, "Cancelled.", reply_markup=get_main_menu_1(chat_id))
+        else:
+            state['hotmail_name'] = ''
             state['step'] = 'language'
             show_languages(chat_id)
 
-    elif state['step'] == 'custom_name':
-        parts = message.text.strip().split(' ')
-        if len(parts) < 2: return bot1.send_message(chat_id, "❌ Invalid format.")
-        state['custom_name'] = (parts[0], " ".join(parts[1:]))
+    elif state['step'] == 'custom_name_hotmail':
+        state['hotmail_name'] = message.text.strip()
         state['step'] = 'language'
         show_languages(chat_id)
 
@@ -1076,7 +1140,7 @@ def start_batch_from_state(chat_id, state):
     os_status = state['os_type'].upper()
     
     bot1.send_message(chat_id, f"⚙️ Starting for {len(state['email_data_list'])} accounts ({proxy_status} | Lang: {lang.upper()} | OS: {os_status})...\n\n👇 *Please wait...*", parse_mode='Markdown', reply_markup=ReplyKeyboardRemove())
-    threading.Thread(target=execute_batch, args=(chat_id, state['email_data_list'], state['password'], lang, state['custom_name'], state['use_proxy'], state['os_type'], False)).start()
+    threading.Thread(target=execute_batch, args=(chat_id, state['email_data_list'], state['password'], lang, state['custom_name'], state['hotmail_name'], state['use_proxy'], state['os_type'], False)).start()
 
 
 # ══════════════════════════════════════════════════════════
