@@ -69,7 +69,6 @@ def load_proxies():
         return []
 
 def get_next_batch_number():
-    """accurate max via order+limit, timestamp fallback — no collision."""
     max_b = 0
     for tbl in ("accounts", "failed_accounts"):
         try:
@@ -83,7 +82,6 @@ def get_next_batch_number():
     return int(time.time()) % 100000
 
 def fetch_all_rows(table, columns):
-    """paginated fetch — bypasses supabase 1000 row default limit."""
     out = []
     offset = 0
     while True:
@@ -543,6 +541,17 @@ HTML_TEMPLATE = """
             </div>
         </div>
         <div id="mainForm">
+        
+            <div class="card" style="border-left: 4px solid #8b5cf6;">
+                <label>📥 Email Pool (Add Combos)</label>
+                <textarea id="poolCombos" placeholder="email|password|refresh_token|client_id&#10;(Paste 1 or 1000 combos here)"></textarea>
+                <div class="btn-row">
+                    <button class="btn" onclick="addToPool()" style="background:#8b5cf6;">📥 Add to Pool</button>
+                    <button class="btn" onclick="deleteFromPool()" style="background:#ef4444;">🗑 Delete</button>
+                </div>
+                <div id="poolResult" style="margin-top:10px; font-size:14px; font-weight:bold; color:#4ade80; word-wrap:break-word;"></div>
+            </div>
+
             <div class="card">
                 <label>Emails / Combos</label>
                 <textarea id="emails" placeholder="email|password|refresh_token|client_id"></textarea>
@@ -629,9 +638,71 @@ HTML_TEMPLATE = """
                 <div class="btn-row" style="margin-top:0;">
                     <a href="/download/success/${b.batch_id}" class="btn success" style="padding:8px; font-size:12px; text-decoration:none; text-align:center;">✅ CSV</a>
                     <a href="/download/failed/${b.batch_id}" class="btn failed" style="padding:8px; font-size:12px; text-decoration:none; text-align:center;">❌ CSV</a>
+                    <button onclick="deleteBatch(${b.batch_id})" class="btn" style="padding:8px; font-size:12px; background:#dc2626; border:none;">🗑 Del</button>
                 </div>
             </div>`;
         }).join('');
+    }
+
+    async function deleteBatch(bid) {
+        if(!confirm(`Are you sure you want to DELETE ALL accounts from Batch #${bid}?`)) return;
+        const res = await fetch(`/api/batch/delete/${bid}`, { method: 'POST' });
+        const data = await res.json();
+        if(data.status === 'success') { alert("Batch deleted!"); loadBatches(); }
+        else alert("Error: " + data.msg);
+    }
+
+    async function addToPool() {
+        const raw = document.getElementById('poolCombos').value.trim();
+        if (!raw) return alert("Paste combos first!");
+        const combos = raw.split('\\n').map(c => c.trim()).filter(c => c);
+        
+        document.getElementById('poolResult').innerText = "⏳ Saving...";
+        const res = await fetch('/api/pool/add', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ combos: combos })
+        });
+        const data = await res.json();
+        if(data.status === 'success') {
+            document.getElementById('poolResult').innerText = "✅ Serials: " + data.serials.join(', ');
+            document.getElementById('poolCombos').value = '';
+        } else {
+            document.getElementById('poolResult').innerText = "❌ Error: " + data.msg;
+        }
+    }
+
+    async function deleteFromPool() {
+        const serialsStr = prompt("Enter Serial Numbers to delete (e.g. 1, 2, 5) OR type 'all' to delete ALL unused emails:");
+        if (!serialsStr) return;
+        
+        if (serialsStr.toLowerCase() === 'all') {
+            if (!confirm("Are you sure you want to delete ALL unused emails in the pool?")) return;
+            document.getElementById('poolResult').innerText = "⏳ Deleting all unused...";
+            const res = await fetch('/api/pool/delete', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ delete_all: true })
+            });
+            const data = await res.json();
+            document.getElementById('poolResult').innerText = data.status === 'success' ? "✅ Deleted all unused emails from pool." : "❌ Error: " + data.msg;
+            return;
+        }
+
+        const serials = serialsStr.split(/[,\s]+/).map(s => parseInt(s.trim())).filter(n => !isNaN(n));
+        if (serials.length === 0) return alert("Invalid serial numbers.");
+        
+        if (!confirm(`Delete ${serials.length} serial(s) from database?`)) return;
+
+        document.getElementById('poolResult').innerText = "⏳ Deleting...";
+        const res = await fetch('/api/pool/delete', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ serials: serials })
+        });
+        const data = await res.json();
+        if(data.status === 'success') {
+            document.getElementById('poolResult').innerText = `✅ Deleted ${data.deleted_count} serial(s).`;
+        } else {
+            document.getElementById('poolResult').innerText = "❌ Error: " + data.msg;
+        }
     }
 
     async function startBatch() {
@@ -731,6 +802,66 @@ def get_status():
     if not session.get('logged_in'): return jsonify({"error": "Unauthorized"}), 401
     return jsonify({"is_running": IS_RUNNING, "success": WEB_STATE["success"], "total": WEB_STATE["total"],
                     "batch_number": WEB_STATE.get("batch_number"), "logs": WEB_LOGS})
+
+@app.route('/api/batch/delete/<int:batch_id>', methods=['POST'])
+def api_batch_delete(batch_id):
+    if not session.get('logged_in'): return jsonify({"error": "Unauthorized"}), 401
+    try:
+        supabase.table("accounts").delete().eq("batch_id", batch_id).execute()
+        supabase.table("failed_accounts").delete().eq("batch_id", batch_id).execute()
+        return jsonify({"status": "success"})
+    except Exception as e:
+        return jsonify({"status": "error", "msg": str(e)}), 500
+
+@app.route('/api/pool/add', methods=['POST'])
+def api_pool_add():
+    if not session.get('logged_in'): return jsonify({"error": "Unauthorized"}), 401
+    data = request.json
+    combos = data.get('combos', [])
+    added_serials = []
+    
+    for c in combos:
+        parts = c.split('|')
+        if len(parts) < 4: continue
+        email = parts[0].strip()
+        if '@' not in email: continue
+        
+        try:
+            res = supabase.table("email_pool").insert({
+                "email": email, 
+                "password": parts[1].strip(), 
+                "refresh_token": parts[2].strip(), 
+                "client_id": parts[3].strip(), 
+                "full_combo": c
+            }).execute()
+            if res.data:
+                added_serials.append(str(res.data[0]['id']))
+        except Exception as e:
+            print(f"Pool insert error: {e}")
+            
+    if not added_serials:
+        return jsonify({"status": "error", "msg": "No valid combos found (need email|pass|token|id)"})
+        
+    return jsonify({"status": "success", "serials": added_serials})
+
+@app.route('/api/pool/delete', methods=['POST'])
+def api_pool_delete():
+    if not session.get('logged_in'): return jsonify({"error": "Unauthorized"}), 401
+    data = request.json
+    
+    try:
+        if data.get('delete_all'):
+            res = supabase.table("email_pool").delete().eq("is_used", False).execute()
+            return jsonify({"status": "success", "deleted_count": len(res.data)})
+        
+        serials = data.get('serials', [])
+        if not serials:
+            return jsonify({"status": "error", "msg": "No serials provided"})
+            
+        res = supabase.table("email_pool").delete().in_("id", serials).execute()
+        return jsonify({"status": "success", "deleted_count": len(res.data)})
+    except Exception as e:
+        return jsonify({"status": "error", "msg": str(e)}), 500
 
 @app.route('/api/otps')
 def get_otps():
@@ -899,6 +1030,7 @@ user_states = {}
 def get_main_menu_1(chat_id):
     m = ReplyKeyboardMarkup(resize_keyboard=True)
     m.add(KeyboardButton('🚀 Create Account'))
+    m.add(KeyboardButton('🔢 Create from Serial'))
     m.add(KeyboardButton('📩 Hotmail Reader'))
     if IS_RUNNING: m.add(KeyboardButton('🛑 Stop Process'))
     if str(chat_id) == ADMIN_ID:
@@ -959,9 +1091,11 @@ def view_proxies(message):
 def clear_proxies(message):
     if str(message.chat.id) != ADMIN_ID: return
     try:
-        supabase.table("proxies").delete().neq("id", 0).execute()
-        bot1.send_message(message.chat.id, "✅ Deleted")
-    except Exception as e: bot1.send_message(message.chat.id, f"Err: {e}")
+        # Using a broader filter that won't fail on UUID or INT
+        supabase.table("proxies").delete().neq("proxy_str", "___SOMETHING_IMPOSSIBLE___").execute()
+        bot1.send_message(message.chat.id, "✅ All proxies deleted.", reply_markup=get_main_menu_1(message.chat.id))
+    except Exception as e: 
+        bot1.send_message(message.chat.id, f"Err: {e}", reply_markup=get_main_menu_1(message.chat.id))
 
 @bot1.message_handler(func=lambda m: m.text == '🔙 Back to Menu')
 def back_to_menu(message):
@@ -985,6 +1119,14 @@ def start_creation(message):
     if IS_RUNNING: return bot1.send_message(chat_id, "⚠️ Running!")
     user_states[chat_id] = {'step': 'emails'}
     bot1.send_message(chat_id, "📧 Paste emails:", reply_markup=ReplyKeyboardRemove())
+
+@bot1.message_handler(func=lambda m: m.text == '🔢 Create from Serial')
+def start_serial_creation(message):
+    chat_id = message.chat.id
+    if not is_authorized(chat_id): return
+    if IS_RUNNING: return bot1.send_message(chat_id, "⚠️ Running!")
+    user_states[chat_id] = {'step': 'serial_input'}
+    bot1.send_message(chat_id, "🔢 **Paste Serial Numbers:**\n\n(Ex: `1, 2, 5` or `1-5` or one per line)", parse_mode='Markdown', reply_markup=ReplyKeyboardRemove())
 
 def show_hotmail_name_menu(chat_id):
     m = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
@@ -1023,6 +1165,48 @@ def handle_inputs(message):
         m = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
         m.add('iOS', 'Android'); m.add('🔙 Cancel')
         bot1.send_message(chat_id, f"✅ {len(edl)} emails.\n📱 OS:", reply_markup=m)
+
+    elif st['step'] == 'serial_input':
+        text = message.text.strip()
+        serial_set = set()
+        tokens = re.split(r'[,\s\n]+', text)
+        for t in tokens:
+            if not t: continue
+            if '-' in t:
+                try:
+                    s, e = map(int, t.split('-'))
+                    serial_set.update(range(s, e+1))
+                except: pass
+            else:
+                try: serial_set.add(int(t))
+                except: pass
+                
+        if not serial_set:
+            return bot1.send_message(chat_id, "❌ No valid serials found. Try again (ex: 1, 2, 3).")
+            
+        try:
+            serials_list = list(serial_set)
+            res = supabase.table("email_pool").select("*").in_("id", serials_list).eq("is_used", False).execute()
+            
+            if not res.data:
+                return bot1.send_message(chat_id, "❌ Serial(s) not found or already used in database.")
+                
+            edl = []
+            fetched_ids = []
+            for row in res.data:
+                edl.append({"email": row['email'], "full_combo": row['full_combo']})
+                fetched_ids.append(row['id'])
+                
+            supabase.table("email_pool").update({"is_used": True}).in_("id", fetched_ids).execute()
+            
+            st['email_data_list'] = edl
+            st['step'] = 'os_mode'
+            m = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
+            m.add('iOS', 'Android'); m.add('🔙 Cancel')
+            bot1.send_message(chat_id, f"✅ Found {len(edl)} emails from serials.\n📱 OS:", reply_markup=m)
+            
+        except Exception as e:
+            return bot1.send_message(chat_id, f"❌ DB Error: {e}")
 
     elif st['step'] == 'hotmail_reader':
         lines = [l.strip() for l in message.text.split('\n') if l.strip()]
@@ -1238,6 +1422,7 @@ def batch_info_cb(call):
     bn = int(call.data.split("_")[1])
     mk = InlineKeyboardMarkup()
     mk.add(InlineKeyboardButton("✅ Success CSV", callback_data=f"bs_{bn}"), InlineKeyboardButton("❌ Failed CSV", callback_data=f"bf_{bn}"))
+    mk.add(InlineKeyboardButton("🗑 Delete Batch", callback_data=f"bd_{bn}"))
     mk.add(InlineKeyboardButton("🔙 Back", callback_data="bb"))
     label = "📜 Old (Batch #0)" if bn == 0 else f"Batch #{bn}"
     bot2.edit_message_text(f"📦 **{label}** — choose download:", call.message.chat.id, call.message.message_id, reply_markup=mk, parse_mode='Markdown')
@@ -1270,6 +1455,17 @@ def batch_dl_cb(call):
         mem = _write_csv(hdr, out)
         bot2.send_document(chat_id, mem, visible_file_name=fn, caption=cap)
         bot2.answer_callback_query(call.id, "Sent!")
+    except Exception as e:
+        bot2.answer_callback_query(call.id, f"Err: {e}", show_alert=True)
+
+@bot2.callback_query_handler(func=lambda c: c.data.startswith("bd_"))
+def batch_del_cb(call):
+    bn = int(call.data.split("_")[1])
+    try:
+        supabase.table("accounts").delete().eq("batch_id", bn).execute()
+        supabase.table("failed_accounts").delete().eq("batch_id", bn).execute()
+        bot2.answer_callback_query(call.id, f"Batch #{bn} Deleted Successfully!", show_alert=True)
+        bot2.delete_message(call.message.chat.id, call.message.message_id)
     except Exception as e:
         bot2.answer_callback_query(call.id, f"Err: {e}", show_alert=True)
 
