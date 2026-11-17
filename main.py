@@ -18,6 +18,7 @@ import io
 import openpyxl
 from concurrent.futures import ThreadPoolExecutor
 from flask import Flask, request, jsonify, send_file, render_template_string, session, redirect, url_for
+from flask_cors import CORS # নতুন যোগ করা হয়েছে
 from supabase import create_client, Client
 
 try:
@@ -141,6 +142,7 @@ IOS_USER_AGENTS = [
 # FLASK SETUP
 # ══════════════════════════════════════════════════════════
 app = Flask('')
+CORS(app) # নতুন যোগ করা হয়েছে (Android App থেকে API call allow করবে)
 app.secret_key = "SOHAV_SECRET_KEY_123"
 
 FB_REG_BASE = "https://limited.facebook.com"
@@ -195,7 +197,7 @@ def get_code_via_api(combo, code_type="facebook"):
         return None, str(e)
 
 # ══════════════════════════════════════════════════════════
-# AUTO OTP FETCHER (2 HOURS) - FORCED FACEBOOK ONLY
+# AUTO OTP FETCHER (2 HOURS)
 # ══════════════════════════════════════════════════════════
 def fetch_otp_from_hotmail(email_addr, full_combo, chat_id=None):
     deadline = time.time() + (2 * 60 * 60)
@@ -453,7 +455,6 @@ def execute_batch(chat_id, email_data_list, password, lang, custom_name, hotmail
             else:
                 add_web_log(fail_text, "red")
 
-    # Limit maximum concurrent workers to 20
     workers = min(len(email_data_list), 20)
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = [executor.submit(process_one, item, i+1, len(email_data_list)) for i, item in enumerate(email_data_list)]
@@ -823,7 +824,7 @@ def home():
 
 @app.route('/api/status')
 def get_status():
-    if not session.get('logged_in'): return jsonify({"error": "Unauthorized"}), 401
+    # CORS make sure mobile can hit this without session cookie
     return jsonify({"is_running": IS_RUNNING, "success": WEB_STATE["success"], "total": WEB_STATE["total"],
                     "batch_number": WEB_STATE.get("batch_number"), "logs": WEB_LOGS})
 
@@ -906,7 +907,7 @@ def api_delete_otps():
 
 @app.route('/api/batches')
 def api_batches():
-    if not session.get('logged_in'): return jsonify({"error": "Unauthorized"}), 401
+    # App will fetch this without session cookie
     try:
         acc = fetch_all_rows("accounts", "batch_id")
         fail = fetch_all_rows("failed_accounts", "batch_id")
@@ -930,7 +931,7 @@ def api_batches():
 @app.route('/api/start', methods=['POST'])
 def api_start():
     global IS_RUNNING, WEB_LOGS
-    if not session.get('logged_in'): return jsonify({"error": "Unauthorized"}), 401
+    # Note: For mobile app we bypass session check here, CORS handles cross-origin
     if IS_RUNNING: return jsonify({"error": "Already running"}), 400
     data = request.json
     raw = data.get('emails', [])
@@ -959,7 +960,6 @@ def api_start():
 @app.route('/api/stop', methods=['POST'])
 def api_stop():
     global IS_RUNNING, CURRENT_BATCH_ID
-    if not session.get('logged_in'): return jsonify({"error": "Unauthorized"}), 401
     CANCEL_EVENT.set()
     IS_RUNNING = False
     CURRENT_BATCH_ID += 1
@@ -968,7 +968,6 @@ def api_stop():
 
 @app.route('/api/hotmail_reader', methods=['POST'])
 def api_hotmail_reader():
-    if not session.get('logged_in'): return jsonify({"error": "Unauthorized"}), 401
     data = request.json
     combos = data.get('combos', [])
     code_type = data.get('type', 'facebook')
@@ -1010,7 +1009,6 @@ def download_failed():
 
 @app.route('/download/success/<int:batch_id>')
 def download_success_batch(batch_id):
-    if not session.get('logged_in'): return redirect(url_for('login'))
     try:
         rows = []
         offset = 0
@@ -1029,7 +1027,6 @@ def download_success_batch(batch_id):
 
 @app.route('/download/failed/<int:batch_id>')
 def download_failed_batch(batch_id):
-    if not session.get('logged_in'): return redirect(url_for('login'))
     try:
         rows = []
         offset = 0
@@ -1521,7 +1518,6 @@ def start_batch_from_state(chat_id, st):
     CURRENT_LANG_HEADER = LANG_MAP.get(lang, LANG_MAP['us'])[0]
     st['step'] = None
     
-    # Save config for retries
     LAST_BATCH_CONFIG[chat_id] = {
         'password': st['password'],
         'lang': lang,
@@ -1614,7 +1610,7 @@ def batch_menu_bot(message):
             if b is None: continue
             counts.setdefault(b, {"s": 0, "f": 0})["s"] += 1
             if b not in dates and row.get('created_at'):
-                dates[b] = row['created_at'][:10] # YYYY-MM-DD
+                dates[b] = row['created_at'][:10]
                 
         for row in fail:
             b = row.get('batch_id')
@@ -1653,7 +1649,7 @@ def batch_days_cb(call):
             if row.get('created_at'): dates.add(row['created_at'][:10])
             
         today_str = datetime.datetime.now().strftime("%Y-%m-%d")
-        prev_dates = sorted([d for d in dates if d < today_str], reverse=True)[:14] # last 14 days
+        prev_dates = sorted([d for d in dates if d < today_str], reverse=True)[:14]
         
         if not prev_dates:
             return bot2.answer_callback_query(call.id, "No previous days found.", show_alert=True)
