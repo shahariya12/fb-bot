@@ -18,7 +18,7 @@ import io
 import openpyxl
 from concurrent.futures import ThreadPoolExecutor
 from flask import Flask, request, jsonify, send_file, render_template_string, session, redirect, url_for
-from flask_cors import CORS # নতুন যোগ করা হয়েছে
+from flask_cors import CORS
 from supabase import create_client, Client
 
 try:
@@ -127,22 +127,18 @@ def fetch_all_rows(table, columns):
 ANDROID_USER_AGENTS = [
     "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Mobile Safari/537.36",
     "Mozilla/5.0 (Linux; Android 14; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.6422.147 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.113 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 12; SM-A525F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.6312.118 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 11; M2101K6G) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.6261.119 Mobile Safari/537.36"
+    "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.113 Mobile Safari/537.36"
 ]
 IOS_USER_AGENTS = [
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1",
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_1_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1",
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 16_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Mobile/15E148 Safari/604.1"
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_1_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1"
 ]
 
 # ══════════════════════════════════════════════════════════
 # FLASK SETUP
 # ══════════════════════════════════════════════════════════
 app = Flask('')
-CORS(app) # নতুন যোগ করা হয়েছে (Android App থেকে API call allow করবে)
+CORS(app)
 app.secret_key = "SOHAV_SECRET_KEY_123"
 
 FB_REG_BASE = "https://limited.facebook.com"
@@ -172,7 +168,7 @@ def is_authorized(chat_id):
     return str(chat_id) in load_auth_users()
 
 # ══════════════════════════════════════════════════════════
-# MANUAL READER API
+# HOTMAIL READER API
 # ══════════════════════════════════════════════════════════
 def get_code_via_api(combo, code_type="facebook"):
     try:
@@ -186,7 +182,7 @@ def get_code_via_api(combo, code_type="facebook"):
             "type": code_type
         }
         headers = {"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"}
-        res = requests.post("https://tools.dongvanfb.net/api/get_code_oauth2", json=payload, headers=headers, timeout=10)
+        res = requests.post("https://tools.dongvanfb.net/api/get_code_oauth2", json=payload, headers=headers, timeout=15)
         if res.status_code == 200:
             rj = res.json()
             if rj.get("status") is True and "code" in rj:
@@ -197,7 +193,7 @@ def get_code_via_api(combo, code_type="facebook"):
         return None, str(e)
 
 # ══════════════════════════════════════════════════════════
-# AUTO OTP FETCHER (2 HOURS)
+# AUTO OTP FETCHER
 # ══════════════════════════════════════════════════════════
 def fetch_otp_from_hotmail(email_addr, full_combo, chat_id=None):
     deadline = time.time() + (2 * 60 * 60)
@@ -219,17 +215,7 @@ def fetch_otp_from_hotmail(email_addr, full_combo, chat_id=None):
 LANG_MAP = {
     'us': ('en-US,en;q=0.9', 'America/New_York'), 'gb': ('en-GB,en;q=0.9', 'Europe/London'),
     'de': ('de-DE,de;q=0.9,en;q=0.8', 'Europe/Berlin'), 'bd': ('bn-BD,bn;q=0.9,en;q=0.8', 'Asia/Dhaka'),
-    'id': ('id-ID,id;q=0.9,en;q=0.8', 'Asia/Jakarta'), 'fr': ('fr-FR,fr;q=0.9,en;q=0.8', 'Europe/Paris'),
-    'es': ('es-ES,es;q=0.9,en;q=0.8', 'Europe/Madrid'), 'mx': ('es-MX,es;q=0.9,en;q=0.8', 'America/Mexico_City'),
-    'br': ('pt-BR,pt;q=0.9,en;q=0.8', 'America/Sao_Paulo'), 'ru': ('ru-RU,ru;q=0.9,en;q=0.8', 'Europe/Moscow'),
-    'it': ('it-IT,it;q=0.9,en;q=0.8', 'Europe/Rome'), 'ar': ('ar-SA,ar;q=0.9,en;q=0.8', 'Asia/Riyadh'),
-    'pk': ('ur-PK,ur;q=0.9,en;q=0.8', 'Asia/Karachi'), 'ph': ('en-PH,en;q=0.9', 'Asia/Manila'),
-    'tr': ('tr-TR,tr;q=0.9,en;q=0.8', 'Europe/Istanbul'), 'in': ('hi-IN,hi;q=0.9,en;q=0.8', 'Asia/Kolkata'),
-    'ng': ('en-NG,en;q=0.9', 'Africa/Lagos'), 'eg': ('ar-EG,ar;q=0.9,en;q=0.8', 'Africa/Cairo'),
-    'za': ('en-ZA,en;q=0.9', 'Africa/Johannesburg'), 'ca': ('en-CA,en;q=0.9', 'America/Toronto'),
-    'au': ('en-AU,en;q=0.9', 'Australia/Sydney'), 'nl': ('nl-NL,nl;q=0.9,en;q=0.8', 'Europe/Amsterdam'),
-    'pl': ('pl-PL,pl;q=0.9,en;q=0.8', 'Europe/Warsaw'), 'se': ('sv-SE,sv;q=0.9,en;q=0.8', 'Europe/Stockholm'),
-    'vn': ('vi-VN,vi;q=0.9,en;q=0.8', 'Asia/Ho_Chi_Minh'), 'th': ('th-TH,th;q=0.9,en;q=0.8', 'Asia/Bangkok')
+    'id': ('id-ID,id;q=0.9,en;q=0.8', 'Asia/Jakarta'), 'fr': ('fr-FR,fr;q=0.9,en;q=0.8', 'Europe/Paris')
 }
 CURRENT_LANG_HEADER = "en-US,en;q=0.9"
 
@@ -288,7 +274,9 @@ def fb_create_account(email, password, lang_code, custom_fname, custom_lname, pr
     fp = build_fingerprint(os_type)
     cookies_warm, lsd_token = warmup_session(session, fp, proxy_dict)
     if CANCEL_EVENT.is_set(): return (None, 'CANCELLED')
-    if CANCEL_EVENT.wait(timeout=random.uniform(2.0, 4.0)):
+    
+    # ⚠️ Checkpoint কমানোর জন্য ডিলে বাড়ানো হয়েছে (১৫ থেকে ৩০ সেকেন্ড)
+    if CANCEL_EVENT.wait(timeout=random.uniform(15.0, 30.0)):
         return (None, 'CANCELLED')
 
     reg_fp = build_fingerprint(os_type)
@@ -321,8 +309,10 @@ def fb_create_account(email, password, lang_code, custom_fname, custom_lname, pr
             'referer': f"{FB_REG_BASE}/reg/?cid=103", 'x-fb-lsd': lsd,
             "Cookie": build_cookie_header(cookies_warm)
         })
+        
         if CANCEL_EVENT.wait(timeout=random.uniform(3.0, 6.0)):
             return (None, 'CANCELLED')
+            
         r = session.post(f"{FB_REG_BASE}/reg/submit/?app_id=103&multi_step_form=1",
                          headers=headers, data=data, impersonate=reg_fp["impersonate"], proxies=proxy_dict, timeout=30)
     except:
@@ -358,7 +348,7 @@ def resend_otp(session, uid, proxy):
     except: return False
 
 # ══════════════════════════════════════════════════════════
-# BATCH EXECUTION
+# BATCH EXECUTION (Max 20 Threads)
 # ══════════════════════════════════════════════════════════
 def execute_batch(chat_id, email_data_list, password, lang, custom_name, hotmail_name, use_proxy, os_type, is_web=False):
     global IS_RUNNING, WEB_STATE, CURRENT_BATCH_ID, CURRENT_BATCH_NUMBER
@@ -455,6 +445,9 @@ def execute_batch(chat_id, email_data_list, password, lang, custom_name, hotmail
             else:
                 add_web_log(fail_text, "red")
 
+    # ══════════════════════════════════════════════════════════
+    # Max 20 Threads (Queue System) - Render Crash এড়াতে
+    # ══════════════════════════════════════════════════════════
     workers = min(len(email_data_list), 20)
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = [executor.submit(process_one, item, i+1, len(email_data_list)) for i, item in enumerate(email_data_list)]
@@ -824,7 +817,6 @@ def home():
 
 @app.route('/api/status')
 def get_status():
-    # CORS make sure mobile can hit this without session cookie
     return jsonify({"is_running": IS_RUNNING, "success": WEB_STATE["success"], "total": WEB_STATE["total"],
                     "batch_number": WEB_STATE.get("batch_number"), "logs": WEB_LOGS})
 
@@ -907,7 +899,6 @@ def api_delete_otps():
 
 @app.route('/api/batches')
 def api_batches():
-    # App will fetch this without session cookie
     try:
         acc = fetch_all_rows("accounts", "batch_id")
         fail = fetch_all_rows("failed_accounts", "batch_id")
@@ -931,7 +922,6 @@ def api_batches():
 @app.route('/api/start', methods=['POST'])
 def api_start():
     global IS_RUNNING, WEB_LOGS
-    # Note: For mobile app we bypass session check here, CORS handles cross-origin
     if IS_RUNNING: return jsonify({"error": "Already running"}), 400
     data = request.json
     raw = data.get('emails', [])
