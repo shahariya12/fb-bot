@@ -121,6 +121,26 @@ def fetch_all_rows(table, columns):
         offset += 1000
     return out
 
+def fetch_today_rows(table, columns):
+    out = []
+    today_str = datetime.datetime.now().strftime("%Y-%m-%d")
+    t_start = f"{today_str}T00:00:00"
+    t_end = f"{today_str}T23:59:59"
+    offset = 0
+    while True:
+        try:
+            r = supabase.table(table).select(columns) \
+                .gte("created_at", t_start).lte("created_at", t_end) \
+                .range(offset, offset + 999).execute()
+        except Exception as e:
+            print(f"Today fetch error ({table}): {e}")
+            break
+        if not r.data: break
+        out.extend(r.data)
+        if len(r.data) < 1000: break
+        offset += 1000
+    return out
+
 # ══════════════════════════════════════════════════════════
 # USER AGENTS
 # ══════════════════════════════════════════════════════════
@@ -275,7 +295,6 @@ def fb_create_account(email, password, lang_code, custom_fname, custom_lname, pr
     cookies_warm, lsd_token = warmup_session(session, fp, proxy_dict)
     if CANCEL_EVENT.is_set(): return (None, 'CANCELLED')
     
-    # ⚠️ Checkpoint কমানোর জন্য ডিলে বাড়ানো হয়েছে (১৫ থেকে ৩০ সেকেন্ড)
     if CANCEL_EVENT.wait(timeout=random.uniform(15.0, 30.0)):
         return (None, 'CANCELLED')
 
@@ -348,7 +367,7 @@ def resend_otp(session, uid, proxy):
     except: return False
 
 # ══════════════════════════════════════════════════════════
-# BATCH EXECUTION (Max 20 Threads)
+# BATCH EXECUTION
 # ══════════════════════════════════════════════════════════
 def execute_batch(chat_id, email_data_list, password, lang, custom_name, hotmail_name, use_proxy, os_type, is_web=False):
     global IS_RUNNING, WEB_STATE, CURRENT_BATCH_ID, CURRENT_BATCH_NUMBER
@@ -445,9 +464,6 @@ def execute_batch(chat_id, email_data_list, password, lang, custom_name, hotmail
             else:
                 add_web_log(fail_text, "red")
 
-    # ══════════════════════════════════════════════════════════
-    # Max 20 Threads (Queue System) - Render Crash এড়াতে
-    # ══════════════════════════════════════════════════════════
     workers = min(len(email_data_list), 20)
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = [executor.submit(process_one, item, i+1, len(email_data_list)) for i, item in enumerate(email_data_list)]
@@ -600,7 +616,11 @@ HTML_TEMPLATE = """
                 <label>📥 Download ALL</label>
                 <div class="btn-row">
                     <a href="/download/success" class="btn success" style="text-decoration:none; text-align:center;">✅ All Success</a>
-                    <a href="/download/failed" class="btn failed" style="text-decoration:none; text-align:center;">❌ All Failed</a>
+                    <a href="/download/failed"  class="btn failed"  style="text-decoration:none; text-align:center;">❌ All Failed</a>
+                </div>
+                <div class="btn-row">
+                    <a href="/download/today/success" class="btn success" style="text-decoration:none; text-align:center; background:#059669;">📥 Today Success</a>
+                    <a href="/download/today/failed"  class="btn failed"  style="text-decoration:none; text-align:center; background:#dc2626;">📥 Today Failed</a>
                 </div>
             </div>
             <div id="logs"></div>
@@ -995,6 +1015,32 @@ def download_failed():
         out = [[x.get('full_combo'), x.get('reason')] for x in rows]
         mem = _write_csv(['FULL_MAIL', 'REASON'], out)
         return send_file(mem, as_attachment=True, download_name="all_failed.csv", mimetype='text/csv')
+    except Exception as e: return f"Error: {e}", 500
+
+@app.route('/download/today/success')
+def download_today_success():
+    if not session.get('logged_in'): return redirect(url_for('login'))
+    try:
+        rows = fetch_today_rows("accounts", "uid, password, cookie, full_combo")
+        if not rows: return "No data today", 404
+        out = [[x.get('uid'), x.get('password'), x.get('cookie'), x.get('full_combo')] for x in rows]
+        mem = _write_csv(['UID', 'PASSWORD', 'COOKIE', 'FULL_MAIL'], out)
+        today_str = datetime.datetime.now().strftime("%Y-%m-%d")
+        return send_file(mem, as_attachment=True,
+                         download_name=f"today_success_{today_str}.csv", mimetype='text/csv')
+    except Exception as e: return f"Error: {e}", 500
+
+@app.route('/download/today/failed')
+def download_today_failed():
+    if not session.get('logged_in'): return redirect(url_for('login'))
+    try:
+        rows = fetch_today_rows("failed_accounts", "full_combo, reason")
+        if not rows: return "No data today", 404
+        out = [[x.get('full_combo'), x.get('reason')] for x in rows]
+        mem = _write_csv(['FULL_MAIL', 'REASON'], out)
+        today_str = datetime.datetime.now().strftime("%Y-%m-%d")
+        return send_file(mem, as_attachment=True,
+                         download_name=f"today_failed_{today_str}.csv", mimetype='text/csv')
     except Exception as e: return f"Error: {e}", 500
 
 @app.route('/download/success/<int:batch_id>')
@@ -1533,6 +1579,7 @@ def get_main_menu_2(chat_id):
     m.add(KeyboardButton('🗑 Delete OTPs'))
     m.add(KeyboardButton('📦 Batch Downloads'))
     m.add(KeyboardButton('📁 Download ALL Success'), KeyboardButton('❌ Download ALL Failed'))
+    m.add(KeyboardButton('📥 Today Success'), KeyboardButton('📥 Today Failed'))
     return m
 
 @bot2.message_handler(commands=['start'])
@@ -1585,6 +1632,37 @@ def send_failed_all(message):
         bot2.send_document(message.chat.id, mem, visible_file_name="all_failed.csv", caption="All Failed")
     except Exception as e: bot2.send_message(message.chat.id, f"Err: {e}")
 
+# ─── NEW: Today's success/failed direct commands ───
+@bot2.message_handler(func=lambda m: m.text == '📥 Today Success')
+def send_today_success(message):
+    if not is_authorized(message.chat.id): return
+    chat_id = message.chat.id
+    try:
+        rows = fetch_today_rows("accounts", "uid, password, cookie, full_combo")
+        if not rows: return bot2.send_message(chat_id, "❌ No success today.")
+        today_str = datetime.datetime.now().strftime("%Y-%m-%d")
+        out = [[x.get('uid'), x.get('password'), x.get('cookie'), x.get('full_combo')] for x in rows]
+        mem = _write_csv(['UID', 'PASSWORD', 'COOKIE', 'FULL_MAIL'], out)
+        bot2.send_document(chat_id, mem,
+                           visible_file_name=f"today_success_{today_str}.csv",
+                           caption=f"📥 Today's Success ({today_str}) — {len(rows)} accounts")
+    except Exception as e: bot2.send_message(chat_id, f"Err: {e}")
+
+@bot2.message_handler(func=lambda m: m.text == '📥 Today Failed')
+def send_today_failed(message):
+    if not is_authorized(message.chat.id): return
+    chat_id = message.chat.id
+    try:
+        rows = fetch_today_rows("failed_accounts", "full_combo, reason")
+        if not rows: return bot2.send_message(chat_id, "❌ No failures today.")
+        today_str = datetime.datetime.now().strftime("%Y-%m-%d")
+        out = [[x.get('full_combo'), x.get('reason')] for x in rows]
+        mem = _write_csv(['FULL_MAIL', 'REASON'], out)
+        bot2.send_document(chat_id, mem,
+                           visible_file_name=f"today_failed_{today_str}.csv",
+                           caption=f"📥 Today's Failed ({today_str}) — {len(rows)} accounts")
+    except Exception as e: bot2.send_message(chat_id, f"Err: {e}")
+
 @bot2.message_handler(func=lambda m: m.text == '📦 Batch Downloads')
 def batch_menu_bot(message):
     chat_id = message.chat.id
@@ -1608,12 +1686,18 @@ def batch_menu_bot(message):
             counts.setdefault(b, {"s": 0, "f": 0})["f"] += 1
             if b not in dates and row.get('created_at'):
                 dates[b] = row['created_at'][:10]
-                
-        if not counts: return bot2.send_message(chat_id, "❌ No batches yet.")
-        
-        today_str = datetime.datetime.now().strftime("%Y-%m-%d")
         
         mk = InlineKeyboardMarkup()
+        mk.row(
+            InlineKeyboardButton("📥 Today's Success", callback_data="td_s"),
+            InlineKeyboardButton("📥 Today's Failed",  callback_data="td_f")
+        )
+        
+        if not counts:
+            mk.add(InlineKeyboardButton("No batches yet.", callback_data="none"))
+            return bot2.send_message(chat_id, "📦 **Batch Downloads:**", reply_markup=mk, parse_mode='Markdown')
+        
+        today_str = datetime.datetime.now().strftime("%Y-%m-%d")
         has_today = False
         for bn in sorted(counts.keys(), reverse=True):
             b_date = dates.get(bn, "Unknown")
@@ -1629,6 +1713,32 @@ def batch_menu_bot(message):
         mk.add(InlineKeyboardButton("📅 Previous Days", callback_data="b_days"))
         bot2.send_message(chat_id, "📦 **Today's Batches:**", reply_markup=mk, parse_mode='Markdown')
     except Exception as e: bot2.send_message(chat_id, f"Err: {e}")
+
+@bot2.callback_query_handler(func=lambda c: c.data in ["td_s", "td_f"])
+def today_download_cb(call):
+    is_s = call.data == "td_s"
+    chat_id = call.message.chat.id
+    bot2.answer_callback_query(call.id, "⏳ Fetching...")
+    try:
+        if is_s:
+            rows = fetch_today_rows("accounts", "uid, password, cookie, full_combo")
+        else:
+            rows = fetch_today_rows("failed_accounts", "full_combo, reason")
+        if not rows:
+            return bot2.send_message(chat_id, "❌ No data today.")
+        today_str = datetime.datetime.now().strftime("%Y-%m-%d")
+        if is_s:
+            out = [[x.get('uid'), x.get('password'), x.get('cookie'), x.get('full_combo')] for x in rows]
+            hdr, fn = ['UID', 'PASSWORD', 'COOKIE', 'FULL_MAIL'], f"today_success_{today_str}.csv"
+            cap = f"📥 Today's Success ({today_str}) — {len(rows)} accounts"
+        else:
+            out = [[x.get('full_combo'), x.get('reason')] for x in rows]
+            hdr, fn = ['FULL_MAIL', 'REASON'], f"today_failed_{today_str}.csv"
+            cap = f"📥 Today's Failed ({today_str}) — {len(rows)} accounts"
+        mem = _write_csv(hdr, out)
+        bot2.send_document(chat_id, mem, visible_file_name=fn, caption=cap)
+    except Exception as e:
+        bot2.send_message(chat_id, f"Err: {e}")
 
 @bot2.callback_query_handler(func=lambda c: c.data == "b_days")
 def batch_days_cb(call):
