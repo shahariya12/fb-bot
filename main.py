@@ -237,7 +237,6 @@ LANG_MAP = {
     'de': ('de-DE,de;q=0.9,en;q=0.8', 'Europe/Berlin'), 'bd': ('bn-BD,bn;q=0.9,en;q=0.8', 'Asia/Dhaka'),
     'id': ('id-ID,id;q=0.9,en;q=0.8', 'Asia/Jakarta'), 'fr': ('fr-FR,fr;q=0.9,en;q=0.8', 'Europe/Paris')
 }
-CURRENT_LANG_HEADER = "en-US,en;q=0.9"
 
 DEFAULT_FIRST_NAMES = ['Arafat', 'Rakib', 'Sabbir', 'Nayeem', 'Rifat', 'Tanvir', 'Shakib', 'Sajid', 'John', 'David', 'Michael', 'James']
 DEFAULT_LAST_NAMES = ['Hossain', 'Ahmed', 'Khan', 'Islam', 'Rahman', 'Sarker', 'Smith', 'Johnson', 'Williams', 'Brown']
@@ -250,17 +249,19 @@ FRENCH_LAST_NAMES = ["Martin", "Bernard", "Thomas", "Petit", "Robert", "Richard"
 
 SCREEN_PROFILES = [(390, 844, 3.0), (393, 852, 3.0), (428, 926, 3.0), (430, 932, 3.0), (375, 812, 3.0)]
 
-def build_fingerprint(os_type="ios"):
+def build_fingerprint(os_type="ios", lang_code="us"):
     if os_type == "android":
         ua = random.choice(ANDROID_USER_AGENTS); imp = "chrome120"
     else:
         ua = random.choice(IOS_USER_AGENTS); imp = "safari15_5"
     sw, sh, _ = random.choice(SCREEN_PROFILES)
+    lang_header = LANG_MAP.get(lang_code, LANG_MAP['us'])[0]
+    
     return {
         "impersonate": imp,
         "pringer": hashlib.sha256(f"{ua}-{sw}x{sh}-{uuid.uuid4()}".encode()).hexdigest()[:32],
         "headers": {
-            "User-Agent": ua, "Accept-Language": CURRENT_LANG_HEADER,
+            "User-Agent": ua, "Accept-Language": lang_header,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "sec-fetch-site": "same-origin", "sec-fetch-mode": "navigate", "sec-fetch-dest": "document",
         }
@@ -291,14 +292,15 @@ def warmup_session(session, fp, proxy):
 def fb_create_account(email, password, lang_code, custom_fname, custom_lname, proxy_dict, os_type):
     if CANCEL_EVENT.is_set(): return (None, 'CANCELLED')
     session = cureq.Session()
-    fp = build_fingerprint(os_type)
+    
+    fp = build_fingerprint(os_type, lang_code)
     cookies_warm, lsd_token = warmup_session(session, fp, proxy_dict)
     if CANCEL_EVENT.is_set(): return (None, 'CANCELLED')
     
     if CANCEL_EVENT.wait(timeout=random.uniform(15.0, 30.0)):
         return (None, 'CANCELLED')
 
-    reg_fp = build_fingerprint(os_type)
+    reg_fp = build_fingerprint(os_type, lang_code)
     try:
         r = session.get(f"{FB_REG_BASE}/reg/?cid=103", headers=reg_fp["headers"], impersonate=reg_fp["impersonate"], proxies=proxy_dict, timeout=10)
         m = re.search(r'"LSD",\[\],\{"token":"([^"]+)"', r.text)
@@ -564,18 +566,10 @@ HTML_TEMPLATE = """
 <body>
     <div class="header"><h1>🚀 Creator App</h1><button onclick="window.location.reload()">🔄</button></div>
     <div class="status-bar" id="status">Status: Idle</div>
+    
     <div class="content">
-        <div id="otp-container">
-            <div class="card">
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-                    <label style="color:#4ade80; margin-bottom:0;">📩 Recent OTPs</label>
-                    <button class="del-btn" onclick="deleteOTPs()">🗑 Delete All</button>
-                </div>
-                <div id="otp-list"></div>
-            </div>
-        </div>
+        <!-- MAIN FORM -->
         <div id="mainForm">
-        
             <div class="card" style="border-left: 4px solid #8b5cf6;">
                 <label>📥 Email Pool (Add Combos)</label>
                 <textarea id="poolCombos" placeholder="email|password|refresh_token|client_id&#10;(Paste 1 or 1000 combos here)"></textarea>
@@ -606,12 +600,7 @@ HTML_TEMPLATE = """
                 <button class="btn" id="startBtn" onclick="startBatch()">▶ START</button>
                 <button class="btn stop" id="stopBtn" onclick="stopBatch()">🛑 STOP</button>
             </div>
-            <div class="card">
-                <label>📦 Batch Downloads</label>
-                <div id="batchList" style="max-height: 400px; overflow-y: auto;">
-                    <p style="color:#94a3b8; font-size:12px;">Loading...</p>
-                </div>
-            </div>
+            
             <div class="card">
                 <label>📥 Download ALL</label>
                 <div class="btn-row">
@@ -635,18 +624,84 @@ HTML_TEMPLATE = """
                 <div id="readerResult" style="margin-top:10px; font-size:12px; max-height:300px; overflow-y:auto; background:#0f172a; padding:10px; border-radius:8px; display:none; border:1px solid #334155;"></div>
             </div>
         </div>
+
+        <!-- OTP CONTAINER -->
+        <div id="otp-container">
+            <div class="card">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                    <label style="color:#4ade80; margin-bottom:0;">📩 Recent OTPs</label>
+                    <button class="del-btn" onclick="deleteOTPs()">🗑 Delete All</button>
+                </div>
+                <div id="otp-list"></div>
+            </div>
+        </div>
+
+        <!-- BATCH CONTAINER -->
+        <div id="batch-container" class="hidden">
+            <div class="card">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+                    <label style="color:#38bdf8; margin-bottom:0; font-size:16px;">📦 Batch Downloads</label>
+                </div>
+                <div id="batchList" style="max-height: 600px; overflow-y: auto;">
+                    <p style="color:#94a3b8; font-size:12px;">Loading...</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- PROXY CONTAINER -->
+        <div id="proxy-container" class="hidden">
+            <div class="card">
+                <label>🔌 Add Proxies</label>
+                <textarea id="proxyInput" placeholder="ip:port&#10;ip:port:user:pass&#10;(One per line)"></textarea>
+                <button class="btn" onclick="addProxies()" style="background:#0ea5e9;">➕ Add Proxies</button>
+                <div id="proxyResult" style="margin-top:10px; font-size:14px; font-weight:bold; color:#4ade80;"></div>
+            </div>
+            
+            <div class="card">
+                <label>🌍 Proxy Country</label>
+                <select id="proxyCountrySelect">
+                    <option value="us">US</option><option value="bd">BD</option><option value="in">IN</option>
+                    <option value="fr">FR</option><option value="de">DE</option><option value="br">BR</option>
+                    <option value="id">ID</option><option value="ru">RU</option><option value="gb">GB</option><option value="ca">CA</option>
+                </select>
+                <button class="btn" onclick="setProxyCountry()" style="background:#8b5cf6;">Update Country</button>
+            </div>
+
+            <div class="card">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                    <label style="color:#ef4444; margin-bottom:0;">Current Proxies (<span id="proxyCount">0</span>)</label>
+                    <button class="del-btn" onclick="clearProxies()">🗑 Clear All</button>
+                </div>
+                <div id="proxyList" style="max-height:300px; overflow-y:auto; font-family:monospace; font-size:12px;"></div>
+            </div>
+        </div>
     </div>
+
     <div class="bottom-nav">
         <a href="#" class="nav-item active" id="nav-home" onclick="showHome(event)">🏠 Home</a>
+        <a href="#" class="nav-item" id="nav-batch" onclick="showBatches(event)">📦 Batches</a>
+        <a href="#" class="nav-item" id="nav-proxy" onclick="showProxies(event)">🔌 Proxies</a>
         <a href="#" class="nav-item" id="nav-otp" onclick="showOTP(event)">📩 OTP</a>
-        <a href="#" class="nav-item" onclick="window.location.reload()">🔄</a>
         <a href="/logout" class="nav-item" style="color:#ef4444;">🚪 Logout</a>
     </div>
 <script>
     function togglePass() { document.getElementById('customPass').style.display = document.getElementById('passMode').value === 'custom' ? 'block' : 'none'; }
     function toggleName() { document.getElementById('customName').style.display = document.getElementById('nameMode').value === 'custom' ? 'block' : 'none'; }
-    function showHome(e) { if(e) e.preventDefault(); document.getElementById('mainForm').classList.remove('hidden'); document.getElementById('otp-container').classList.add('hidden'); document.getElementById('nav-home').classList.add('active'); document.getElementById('nav-otp').classList.remove('active'); }
-    function showOTP(e) { if(e) e.preventDefault(); document.getElementById('mainForm').classList.add('hidden'); document.getElementById('otp-container').classList.remove('hidden'); document.getElementById('nav-otp').classList.add('active'); document.getElementById('nav-home').classList.remove('active'); fetchOTPs(); }
+    
+    function hideAll() {
+        document.getElementById('mainForm').classList.add('hidden');
+        document.getElementById('otp-container').classList.add('hidden');
+        document.getElementById('batch-container').classList.add('hidden');
+        document.getElementById('proxy-container').classList.add('hidden');
+        
+        document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+    }
+    
+    function showHome(e) { if(e) e.preventDefault(); hideAll(); document.getElementById('mainForm').classList.remove('hidden'); document.getElementById('nav-home').classList.add('active'); }
+    function showOTP(e) { if(e) e.preventDefault(); hideAll(); document.getElementById('otp-container').classList.remove('hidden'); document.getElementById('nav-otp').classList.add('active'); fetchOTPs(); }
+    function showBatches(e) { if(e) e.preventDefault(); hideAll(); document.getElementById('batch-container').classList.remove('hidden'); document.getElementById('nav-batch').classList.add('active'); loadBatches(); }
+    function showProxies(e) { if(e) e.preventDefault(); hideAll(); document.getElementById('proxy-container').classList.remove('hidden'); document.getElementById('nav-proxy').classList.add('active'); loadProxies(); }
+
     function copyCode(code) { navigator.clipboard.writeText(code).then(() => alert("Copied: " + code)); }
     async function deleteOTPs() { if(!confirm("Delete all OTPs?")) return; await fetch('/api/delete_otps', { method: 'POST' }); fetchOTPs(); }
 
@@ -690,59 +745,51 @@ HTML_TEMPLATE = """
         else alert("Error: " + data.msg);
     }
 
-    async function addToPool() {
-        const raw = document.getElementById('poolCombos').value.trim();
-        if (!raw) return alert("Paste combos first!");
-        const combos = raw.split('\\n').map(c => c.trim()).filter(c => c);
-        
-        document.getElementById('poolResult').innerText = "⏳ Saving...";
-        const res = await fetch('/api/pool/add', {
-            method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ combos: combos })
-        });
+    // ─── PROXY SYSTEM ───
+    async function loadProxies() {
+        const res = await fetch('/api/proxies');
         const data = await res.json();
-        if(data.status === 'success') {
-            document.getElementById('poolResult').innerText = "✅ Serials: " + data.serials.join(', ');
-            document.getElementById('poolCombos').value = '';
-        } else {
-            document.getElementById('poolResult').innerText = "❌ Error: " + data.msg;
-        }
+        document.getElementById('proxyCount').innerText = data.count;
+        document.getElementById('proxyCountrySelect').value = data.country;
+        
+        const list = document.getElementById('proxyList');
+        if (data.proxies.length > 0) {
+            list.innerHTML = data.proxies.map(p => `<div style="padding:4px; border-bottom:1px solid #334155;">${p}</div>`).join('');
+        } else { list.innerHTML = `<p style="color:#94a3b8;">No proxies in database.</p>`; }
     }
 
-    async function deleteFromPool() {
-        const serialsStr = prompt("Enter Serial Numbers to delete (e.g. 1, 2, 5) OR type 'all' to delete ALL unused emails:");
-        if (!serialsStr) return;
+    async function addProxies() {
+        const raw = document.getElementById('proxyInput').value.trim();
+        if (!raw) return alert("Paste proxies first!");
+        const lines = raw.split('\\n').map(l => l.trim()).filter(l => l);
         
-        if (serialsStr.toLowerCase() === 'all') {
-            if (!confirm("Are you sure you want to delete ALL unused emails in the pool?")) return;
-            document.getElementById('poolResult').innerText = "⏳ Deleting all unused...";
-            const res = await fetch('/api/pool/delete', {
-                method: 'POST', headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ delete_all: true })
-            });
-            const data = await res.json();
-            document.getElementById('poolResult').innerText = data.status === 'success' ? "✅ Deleted all unused emails from pool." : "❌ Error: " + data.msg;
-            return;
-        }
-
-        const serials = serialsStr.split(/[,\s]+/).map(s => parseInt(s.trim())).filter(n => !isNaN(n));
-        if (serials.length === 0) return alert("Invalid serial numbers.");
-        
-        if (!confirm(`Delete ${serials.length} serial(s) from database?`)) return;
-
-        document.getElementById('poolResult').innerText = "⏳ Deleting...";
-        const res = await fetch('/api/pool/delete', {
+        document.getElementById('proxyResult').innerText = "⏳ Adding...";
+        const res = await fetch('/api/proxies/add', {
             method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ serials: serials })
+            body: JSON.stringify({ proxies: lines })
         });
         const data = await res.json();
-        if(data.status === 'success') {
-            document.getElementById('poolResult').innerText = `✅ Deleted ${data.deleted_count} serial(s).`;
-        } else {
-            document.getElementById('poolResult').innerText = "❌ Error: " + data.msg;
-        }
+        document.getElementById('proxyResult').innerText = data.status === 'success' ? `✅ Added ${data.added} proxies.` : "❌ Error: " + data.msg;
+        document.getElementById('proxyInput').value = '';
+        loadProxies();
     }
 
+    async function clearProxies() {
+        if (!confirm("Are you sure you want to DELETE ALL proxies?")) return;
+        await fetch('/api/proxies/clear', { method: 'POST' });
+        loadProxies();
+    }
+
+    async function setProxyCountry() {
+        const country = document.getElementById('proxyCountrySelect').value;
+        await fetch('/api/proxies/country', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ country: country })
+        });
+        alert("Proxy country updated to: " + country.toUpperCase());
+    }
+
+    // ─── BATCH START/STOP ───
     async function startBatch() {
         const rawEmails = document.getElementById('emails').value.trim();
         if (!rawEmails) return alert("Enter emails!");
@@ -765,6 +812,7 @@ HTML_TEMPLATE = """
         });
     }
     async function stopBatch() { if (!confirm("Stop process?")) return; await fetch('/api/stop', { method: 'POST' }); document.getElementById('stopBtn').style.display = 'none'; }
+    
     async function readHotmail() {
         const raw = document.getElementById('readerCombo').value.trim();
         if(!raw) return alert("Enter combos");
@@ -807,7 +855,6 @@ HTML_TEMPLATE = """
             logs.scrollTop = logs.scrollHeight;
         }
         if (!document.getElementById('otp-container').classList.contains('hidden')) fetchOTPs();
-        loadBatches();
     }, 3000);
 </script>
 </body></html>
@@ -939,6 +986,44 @@ def api_batches():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+# ─── NEW: PROXY API ROUTES ───
+@app.route('/api/proxies')
+def api_get_proxies():
+    if not session.get('logged_in'): return jsonify({"error": "Unauthorized"}), 401
+    proxies = load_proxies()
+    return jsonify({"proxies": proxies, "count": len(proxies), "country": PROXY_COUNTRY})
+
+@app.route('/api/proxies/add', methods=['POST'])
+def api_add_proxies():
+    if not session.get('logged_in'): return jsonify({"error": "Unauthorized"}), 401
+    data = request.json
+    proxies = data.get('proxies', [])
+    added = 0
+    for p in proxies:
+        if ':' not in p: continue
+        try:
+            supabase.table("proxies").insert({"proxy_str": p}).execute()
+            added += 1
+        except: pass
+    return jsonify({"status": "success", "added": added})
+
+@app.route('/api/proxies/clear', methods=['POST'])
+def api_clear_proxies():
+    if not session.get('logged_in'): return jsonify({"error": "Unauthorized"}), 401
+    try:
+        supabase.table("proxies").delete().neq("proxy_str", "___SOMETHING_IMPOSSIBLE___").execute()
+        return jsonify({"status": "success"})
+    except Exception as e:
+        return jsonify({"status": "error", "msg": str(e)}), 500
+
+@app.route('/api/proxies/country', methods=['POST'])
+def api_proxy_country():
+    global PROXY_COUNTRY
+    if not session.get('logged_in'): return jsonify({"error": "Unauthorized"}), 401
+    data = request.json
+    PROXY_COUNTRY = data.get('country', 'fr')
+    return jsonify({"status": "success", "country": PROXY_COUNTRY})
+
 @app.route('/api/start', methods=['POST'])
 def api_start():
     global IS_RUNNING, WEB_LOGS
@@ -959,8 +1044,11 @@ def api_start():
         if not password: return jsonify({"error": "Password required"}), 400
     WEB_LOGS = []
     add_web_log(f"Starting {len(edl)} accounts...", "cyan")
+    
+    lang = data.get('lang', 'us')
+    
     threading.Thread(target=execute_batch, args=(
-        None, edl, password, data.get('lang', 'us'),
+        None, edl, password, lang,
         data.get('custom_name', '') if data.get('name_mode') == 'custom' else '',
         data.get('hotmail_name', '').strip(),
         data['proxy_mode'] == 'yes', data.get('os_mode', 'ios'), True
@@ -1549,9 +1637,8 @@ def show_languages(chat_id):
     bot1.send_message(chat_id, "🌍 Language:", reply_markup=m)
 
 def start_batch_from_state(chat_id, st):
-    global CURRENT_LANG_HEADER, LAST_BATCH_CONFIG
+    global LAST_BATCH_CONFIG
     lang = st['lang']
-    CURRENT_LANG_HEADER = LANG_MAP.get(lang, LANG_MAP['us'])[0]
     st['step'] = None
     
     LAST_BATCH_CONFIG[chat_id] = {
